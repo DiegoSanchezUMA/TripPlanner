@@ -1,0 +1,59 @@
+# Compose base de desarrollo local. Arranca solo la capa de datos (Postgres+pgvector
+# y Redis) — el backend se añade en un paso posterior una vez tenga código real.
+# Uso: desde infra/docker/
+#   docker compose --env-file ../env/.env up -d
+#
+# Producción (VM Oracle Cloud) usará un docker-compose.prod.yml aparte que añade
+# Caddy como reverse proxy con HTTPS automático y no publica los puertos de
+# Postgres/Redis al host (solo red interna) — ver docs/arquitectura-multiagente-crewai.md.
+
+name: tripplanner  # nombre fijo del proyecto Compose: evita que volúmenes/redes se
+                    # llamen "docker_..." (por el nombre de esta carpeta) y coliden
+                    # con otros proyectos Compose que tengas en la misma máquina.
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16   # imagen oficial del proyecto pgvector: ya trae
+                                     # la extensión compilada para Postgres 16, no
+                                     # hace falta Dockerfile propio.
+    container_name: tripplanner-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-tripplanner}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Define POSTGRES_PASSWORD en infra/env/.env}
+      POSTGRES_DB: ${POSTGRES_DB:-tripplanner}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ../postgres/init:/docker-entrypoint-initdb.d:ro   # scripts de arranque (solo la 1ª vez)
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"   # solo localhost, ni siquiera en la LAN
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-tripplanner} -d ${POSTGRES_DB:-tripplanner}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks: [internal]
+
+  redis:
+    image: redis:7-alpine
+    container_name: tripplanner-redis
+    restart: unless-stopped
+    command: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
+    volumes:
+      - redis_data:/data
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks: [internal]
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  internal:
+    driver: bridge

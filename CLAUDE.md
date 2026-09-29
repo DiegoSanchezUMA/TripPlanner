@@ -1,0 +1,86 @@
+# TripPlanner — Planificador de Viajes Multiagente (TFG)
+
+## Resumen
+Aplicación web de planificación de viajes con IA: arquitectura RAG + sistema
+multiagente (CrewAI) para generar itinerarios personalizados en tiempo real, con
+chat conversacional y visualización dinámica del itinerario mientras se construye.
+TFG de Diego Sánchez Contreras (Grado en Ingeniería Informática, UMA), tutor
+Francisco López Valverde.
+
+## Stack
+- Frontend: React, Next.js, TypeScript, CopilotKit (CopilotRuntime como proxy)
+- Estilos/UI: componentes modulares documentados en Storybook
+- Backend: FastAPI (BFF) + CrewAI, Python 3.12, uv
+- Base de datos: PostgreSQL 16 + pgvector (relacional y vectorial en el mismo motor)
+- Caché/cola: Redis
+- Observabilidad: Langfuse
+- LLMs: Groq, Google Gemini, Azure OpenAI (capas gratuitas)
+- Despliegue: frontend en Vercel; backend en una VM Oracle Cloud Always Free
+  (Ampere A1 ARM64, 2 OCPU, 12 GB RAM) con Docker Engine — sin Kubernetes (una
+  sola VM, volumen de usuarios bajo)
+
+## Arquitectura multiagente (cerrada — ver `docs/arquitectura-multiagente-crewai.md`)
+7 agentes, un especialista por servidor MCP (Flight, Hotel, Places & Routes,
+Weather) más Travel Planner, Itinerary Composer e Itinerary Reviewer. Orquestación
+con un CrewAI Flow (`@router classify_intent`, modelo de agencia por adhesión: la
+mayoría de mensajes se resuelven sin instanciar ninguna crew) por encima de dos
+crews: PlanningCrew (`Process.sequential`, async en T2–T4, 8 tareas) y
+RefinementCrew (4 tareas, 3 agentes, sin Travel Planner). Guardrails deterministas
+(anclaje, horario, presupuesto, dieta, accesibilidad, ritmo…) + probabilísticos
+(rúbrica LLM-as-a-judge, 5 dimensiones). Contratos de datos: **Pydantic siempre**,
+sin agente formateador. Memoria: pgvector solo con hechos del usuario (nunca datos
+del mundo); memoria nativa de CrewAI solo *short-term* efímera en producción (no
+aísla por usuario — ver documento de arquitectura §5 antes de tocar esto).
+
+## Estructura del repo (real, verificar antes de asumir `apps/`)
+- `frontend/` — Next.js, Vercel (incluye `.storybook/`, `stories/`, `tests/`)
+- `backend/` — un paquete Python: `app/` (incluye `app/agents/` para
+  flows/crews/guardrails/hooks/tools/models, ver estructura en el documento de
+  arquitectura §11), `evals/`, `reports/`, `scripts/`, `tests/`
+- `shared/` — `contracts/`, `schemas/`, `types/` (tipos compartidos frontend↔backend)
+- `infra/` — `docker/`, `postgres/`, `env/`, `ci/`
+- `docs/` — diagramas y decisiones de arquitectura, incluye:
+  - `arquitectura-multiagente-crewai.md` — **fuente de verdad** del diseño
+    multiagente: agentes, tareas, guardrails, hooks, contratos, persistencia,
+    esqueleto de código, checklist
+  - `requisitos.md` — catálogo completo RF/RNF (183 requisitos) y 23 casos de uso
+  - `data-model/modelo-datos.md` — esquema de base de datos (tablas de dominio +
+    orquestación/autoguardado)
+  - `plan-de-pruebas.md` — estrategia de pruebas, metodología estadística de las
+    44 hipótesis sobre el LLM, escenarios de validación V01–V12
+  - `estado-del-arte.md` — contexto y justificación de las decisiones (por qué
+    CrewAI, por qué MCP, por qué pgvector, panorama competitivo)
+  - `uml/` — diagramas fuente (Visual Paradigm, exportados a `.jpg`): casos de
+    uso, secuencia, componentes, despliegue, clases, requisitos
+  - `agents/`, `api/`, `architecture/`, `decisiones/`, `mcp/`, `rag/` — carpetas
+    reservadas para documentación futura más granular; de momento el contenido
+    vive consolidado en `arquitectura-multiagente-crewai.md`
+
+## Reglas de trabajo
+- Los schemas Pydantic de `backend/app/agents/models/` (contratos de datos, ver
+  `docs/arquitectura-multiagente-crewai.md` §8) son la fuente de verdad del
+  contrato de datos. Frontend y backend nunca deben divergir de ahí; los tipos
+  TypeScript se generan desde el esquema, no se mantienen a mano.
+- Un agente por servidor MCP: no fusionar responsabilidades. Exactamente 7 agentes.
+- No introducir Kubernetes ni `Process.hierarchical` — decisiones cerradas y
+  justificadas en `docs/arquitectura-multiagente-crewai.md` §2 y §14.
+- No usar agente formateador (solo salidas Pydantic vía `output_pydantic`).
+- No raspar precios ni disponibilidad (vuelos, alojamiento), ni como último
+  recurso — el raspado acotado solo vale para datos informativos de lugares.
+- Backend stateless; estado del Flow persistido vía `@persist` respaldado en
+  PostgreSQL (no SQLite, que da bloqueos con ejecuciones concurrentes).
+- No hay botón de guardar: toda mutación del itinerario se autoguarda con bloqueo
+  optimista (versión) y deja una fila en `trip_revisions` (append-only).
+- Sigue las convenciones de tipado estricto en TS y Pydantic en Python.
+- Antes de cambiar algo en `docs/arquitectura-multiagente-crewai.md`, pregunta: es
+  la fuente de verdad de la memoria del TFG.
+- El proyecto está en fase de diseño/documentación: `backend/`, `frontend/` y
+  `shared/` son scaffolding vacío. Antes de escribir código, consulta primero
+  `docs/arquitectura-multiagente-crewai.md` (agentes/tareas/guardrails exactos),
+  `docs/requisitos.md` (qué construir) y `docs/data-model/modelo-datos.md` (esquema).
+
+## Comandos
+- `docker compose up -d --build` — levantar entorno local
+- `docker compose ps` / `docker stats --no-stream` — estado y consumo
+- `make test` — tests backend (pytest) y frontend (Jest/RTL)
+- `uv run ruff check` — lint backend

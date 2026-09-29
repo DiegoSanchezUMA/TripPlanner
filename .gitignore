@@ -1,3 +1,38 @@
+# Secretos — nunca subir
+infra/env/.env
+**/.env
+**/.env.local
+!**/.env.example
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# Node / frontend
+node_modules/
+.next/
+dist/
+build/
+.storybook-static/
+coverage/
+
+# Docker / datos locales
+infra/postgres/data/
+
+# Editor / SO
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Evidencias de pruebas (pueden pesar mucho; el índice va en el Excel)
+Evidencias/
+*.log
 # Logs
 logs
 *.log
