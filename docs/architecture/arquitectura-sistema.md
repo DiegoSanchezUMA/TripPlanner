@@ -101,16 +101,17 @@ docker compose --env-file ../env/.env up -d
 ## 4. Integración y entrega continua
 
 Todo en GitHub Actions (`.github/workflows/`). Todos los workflows dan al
-`GITHUB_TOKEN` solo permiso de lectura (`contents: read`).
+`GITHUB_TOKEN` solo permiso de lectura (`contents: read`), y todas las Actions
+se referencian por SHA de commit, con la versión en un comentario (D-026).
 
 | Workflow | Disparador | Qué hace |
 |---|---|---|
 | `ci.yml` | PR, push a `main`, manual | Calidad y tests de cada parte (§4.1). |
-| `deploy-backend.yml` | CI verde en `main`, manual | Despliegue del backend en la VM (§4.2). |
+| `deploy-backend.yml` | CI verde en `main`, manual | Despliegue del backend en la VM (§4.2). Aún no está en el repo (D-005). |
 | `lighthouse.yml` | PR que toca `frontend/`, manual | Accesibilidad (WCAG AA) y rendimiento web. |
-| `llm-evals.yml` | Solo manual | Evaluación de hipótesis contra datasets de Langfuse (D-008). |
-| `load-test.yml` | Solo manual | Pruebas de carga con Locust (D-008). |
-| `dependabot.yml` | Mensual | Actualiza las versiones de las Actions (D-007). |
+| `llm-evals.yml` | Solo manual | Evaluación de hipótesis contra datasets de Langfuse (D-008). Aún no está en el repo. |
+| `load-test.yml` | Solo manual | Pruebas de carga con Locust (D-008). Aún no está en el repo. |
+| `dependabot.yml` | Mensual | Actualiza las versiones de las Actions: SHA y comentario (D-007, D-026). |
 
 ### 4.1 CI (`ci.yml`)
 
@@ -127,6 +128,9 @@ ejecutan los jobs afectados (D-001).
 | `ci-ok` | Siempre | Un único check que resume el resultado; es el que se marca como obligatorio en `main`. |
 
 ### 4.2 CD del backend (`deploy-backend.yml`)
+
+> Pendiente (D-005): el workflow está escrito, pero no se sube al repo hasta
+> haber probado el CI y preparado la VM.
 
 1. Se dispara cuando el CI de un **push** a `main` termina en verde, o a mano.
 2. Interruptor: no hace nada mientras la variable `DEPLOY_ENABLED` no sea
@@ -152,3 +156,5 @@ secretos viven en el entorno `production`, que permite exigir aprobación manual
 - `GITHUB_TOKEN` de solo lectura; los PRs desde forks no reciben el token de
   SonarQube.
 - Trivy analiza Dockerfiles y Compose en cada cambio de infraestructura.
+- Actions fijadas por SHA de commit, que no se puede reescribir como una
+  etiqueta (D-026).

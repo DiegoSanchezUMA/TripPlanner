@@ -11,10 +11,10 @@ arquitectura multiagente viven en `docs/arquitectura-multiagente-crewai.md`.
 | D-002 | El quality gate *Sonar way* es la única barrera de cobertura | Aceptada |
 | D-003 | Informe HTML de cobertura automático en local | Pendiente |
 | D-004 | Postgres y Redis publicados solo en `127.0.0.1` | Aceptada |
-| D-005 | CD por SSH con build en la VM e interruptor `DEPLOY_ENABLED` | Aceptada |
+| D-005 | CD por SSH con build en la VM e interruptor `DEPLOY_ENABLED` | Pendiente |
 | D-006 | Job `docker` del CI en runner ARM64 | Aceptada |
 | D-007 | Dependabot solo para las versiones de las Actions | Aceptada |
-| D-008 | Evals de LLM y pruebas de carga solo manuales | Aceptada |
+| D-008 | Evals de LLM y pruebas de carga solo manuales | Pendiente |
 | D-009 | CI sin claves reales de LLM ni MCP | Aceptada |
 | D-010 | Extensiones de Postgres activadas por script de inicialización | Aceptada |
 | D-011 | Backend en un único proceso (API + CrewAI Flow) | Aceptada |
@@ -32,6 +32,7 @@ arquitectura multiagente viven en `docs/arquitectura-multiagente-crewai.md`.
 | D-023 | Lint y tipado estrictos en backend y frontend | Aceptada |
 | D-024 | pnpm no ejecuta scripts de instalación de dependencias | Aceptada |
 | D-025 | Entorno de desarrollo local en Windows: uv, Corepack y `.venv` | Aceptada |
+| D-026 | Actions fijadas por SHA de commit y actualizadas a sus últimas versiones | Aceptada |
 
 Formato de cada entrada: contexto, decisión, alternativas descartadas y
 consecuencias. Estados: **Aceptada**, **Pendiente** (decidida pero aún sin
@@ -184,7 +185,8 @@ Postgres (`127.0.0.1:5432`).
 ## D-005 · CD por SSH con build en la VM e interruptor `DEPLOY_ENABLED`
 
 - **Fecha:** 2026-10-01
-- **Estado:** Aceptada
+- **Estado:** Pendiente (2026-10-05: el workflow existe en local, pero no se
+  sube al repo hasta haber probado el CI y preparado la VM)
 
 **Contexto.** El backend se despliega en una única VM ARM64. Hace falta un
 mecanismo de despliegue sencillo, reproducible y que no despliegue código sin
@@ -253,7 +255,10 @@ relacionadas con la seguridad; se actualizan a mano cuando haga falta.
 ## D-008 · Evals de LLM y pruebas de carga solo manuales
 
 - **Fecha:** 2026-10-01
-- **Estado:** Aceptada
+- **Estado:** Pendiente (2026-10-05: los dos workflows existen en local, pero
+  no se suben al repo hasta que puedan funcionar: faltan el módulo de evals, el
+  entorno `evals` con sus claves y un backend desplegado contra el que lanzar
+  la carga)
 
 **Decisión.** `llm-evals.yml` y `load-test.yml` solo se lanzan con
 `workflow_dispatch`, con parámetros (dataset y repeticiones; host, usuarios,
@@ -1033,3 +1038,79 @@ añade a `onlyBuiltDependencies` en el mismo fichero y se anota aquí.
 
 **Consecuencias.** En Windows, borrar `node_modules` con `Remove-Item` falla
 por las rutas largas de pnpm. Hay que usar `cmd /c rd /s /q node_modules`.
+
+---
+
+## D-026 · Actions fijadas por SHA de commit y actualizadas a sus últimas versiones
+
+- **Fecha:** 2026-10-05
+- **Estado:** Aceptada
+
+**Contexto.** Los workflows referenciaban las Actions por etiquetas mayores
+antiguas (`actions/checkout@v4`, `astral-sh/setup-uv@v6`,
+`SonarSource/sonarqube-scan-action@v5`…), que además corren en Node 20. Antes
+del primer push había que actualizarlas, y dos hechos obligan a cambiar también
+la forma de referenciarlas:
+- **Una etiqueta es un puntero que se puede mover.** El 19 de marzo de 2026,
+  con credenciales robadas, un atacante reescribió 76 de las 77 etiquetas de
+  `aquasecurity/trivy-action` (la que usa el job `docker`) para que apuntaran a
+  código que robaba credenciales (aviso GHSA-69fq-xp46-6x23). Solo se libraron
+  la release inmutable 0.35.0 y quien la tenía fijada por SHA. En 2025 pasó lo
+  mismo con `tj-actions/changed-files`.
+- **`astral-sh/setup-uv` ya no publica etiquetas mayores** desde la v8,
+  precisamente por eso: `@v10` no existe y hay que fijar una versión exacta.
+
+**Decisión.** Toda Action se referencia por el SHA completo del commit, con la
+versión en un comentario al final de la línea:
+
+```yaml
+- uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+```
+
+Un SHA no se puede reescribir: apunta siempre al mismo código. Dependabot (D-007)
+entiende este formato y en sus PRs mensuales actualiza a la vez el SHA y el
+comentario.
+
+Versiones aplicadas, tras leer las notas de cada salto mayor:
+
+| Action | Antes | Ahora | Cambio incompatible que podría afectar | ¿Afecta? |
+|---|---|---|---|---|
+| `actions/checkout` | v4 | v7.0.1 | v6 guarda las credenciales en un fichero aparte; v7 bloquea hacer checkout de PRs de forks en `pull_request_target` y `workflow_run` | No: no se usan esos eventos con checkout |
+| `actions/setup-node` | v4 | v7.0.0 | v5 activa la caché sola si hay `packageManager`; v6 la limita a npm | No: la caché de pnpm ya se pide con `cache: pnpm` |
+| `actions/upload-artifact` | v4 | v7.0.1 | Solo Node 24 y ESM | No |
+| `actions/download-artifact` | v4 | v8.0.1 | v5 cambia la ruta al descargar **por ID**; v8 falla si el hash no coincide | No: se descarga por nombre |
+| `astral-sh/setup-uv` | v6 | v10.2.0 | v7 quita `server-url`; v9 deja de podar la caché; v10 desactiva la caché automática en `pull_request_target`, `workflow_run` y `release` | No: se usa `enable-cache: true` explícito y ninguno de esos eventos |
+| `pnpm/action-setup` | v4 | v6.1.0 | v5 pasa a Node 24; v6 y v6.1 añaden soporte de pnpm 11 y 12 | No: sigue instalando la versión de `packageManager`, pnpm 10.34.6 (D-018) |
+| `dorny/paths-filter` | v3 | v4.0.3 | Solo Node 24 | No |
+| `SonarSource/sonarqube-scan-action` | v5 | v8.3.0 | v6 cambia cómo se parsea `args`; v8 verifica la firma del escáner | No: no se usa `args` |
+| `aquasecurity/trivy-action` | v0.36.0 | v0.36.0 | Ya era la última; release inmutable posterior al ataque | — |
+| `treosh/lighthouse-ci-action` | v12 | v12 | Ya era la última | — |
+| `appleboy/ssh-action` | v1 | v1.2.5 | Ninguno (misma versión mayor) | — |
+
+De paso, `load-test.yml` cumple ya lo que decía D-016 y no hacía: `setup-uv`
+con `version: "0.12.23"` y `uvx locust==2.46.6`.
+
+**Alternativas descartadas.**
+- **Etiquetas mayores (`@v7`):** más legibles y reciben parches solas, pero son
+  justo lo que se reescribió en el ataque a Trivy. Además, `setup-uv` ya no las
+  publica.
+- **Etiquetas exactas (`@v7.0.1`):** también se pueden mover, salvo en las
+  releases inmutables, y no todas las Actions las usan.
+- **`pnpm/setup` en lugar de `pnpm/action-setup`:** es el sucesor que recomienda
+  pnpm e instala también Node, pero exige pnpm 11 o superior y el proyecto usa
+  pnpm 10 (D-018). Se puede revisar si se sube de versión.
+
+**Consecuencias.**
+- Los SHA no se leen a simple vista; el comentario con la versión lo compensa y
+  Dependabot lo mantiene al día.
+- El fijado protege la Action que se referencia, no lo que esa Action descarga
+  por su cuenta. `trivy-action` y `appleboy/ssh-action` son *composite* y usan
+  otras Actions o binarios: en el ataque a Trivy, quien había fijado un commit de
+  `trivy-action` anterior a abril de 2025 recibió igualmente un `setup-trivy`
+  malicioso. Por eso conviene fijar también versiones recientes, que fijan sus
+  propias dependencias.
+- Todas las Actions corren ya en Node 24 (salvo las *composite*, que no usan
+  Node).
+- No se puede probar en local: `actionlint` valida la sintaxis y las
+  expresiones de los workflows, pero los parámetros de cada Action se han
+  comprobado leyendo su `action.yml`. La prueba real es el primer PR.
