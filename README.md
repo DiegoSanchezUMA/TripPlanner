@@ -232,7 +232,8 @@ docs/       Diseño, requisitos, decisiones y diagramas
 Cada PR ejecuta [`ci.yml`](.github/workflows/ci.yml): lint, formato, tipos,
 tests y cobertura de backend y frontend, validación de Docker en ARM64, análisis de
 SonarQube Cloud y Lighthouse para la accesibilidad. El check `ci-ok` resume el
-resultado. Más detalle en la [arquitectura del sistema](docs/architecture/arquitectura-sistema.md#4-integración-y-entrega-continua).
+resultado y es obligatorio para hacer merge en `main`. Además, CodeQL analiza
+la seguridad del código y de los workflows en cada PR. Más detalle en la [arquitectura del sistema](docs/architecture/arquitectura-sistema.md#4-integración-y-entrega-continua).
 
 ## Licencia
 

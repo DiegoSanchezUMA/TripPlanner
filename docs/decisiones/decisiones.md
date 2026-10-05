@@ -37,6 +37,9 @@ arquitectura multiagente viven en `docs/arquitectura-multiagente-crewai.md`.
 | D-028 | Hooks de Git con Husky: lint-staged, commitlint y pre-push por partes | Aceptada |
 | D-029 | Prettier como formateador del frontend, en el pre-commit y en el CI | Aceptada |
 | D-030 | Configuración compartida de VS Code: extensiones recomendadas y formato al guardar | Aceptada |
+| D-031 | CI del backend: uv con lockfile verificado y sin compilar, y Postgres de pruebas sin contraseña | Aceptada |
+| D-032 | CodeQL (*default setup*) como capa adicional de análisis de seguridad | Aceptada |
+| D-033 | `main` protegida con un ruleset: PR obligatorio y `ci-ok` como único check requerido | Aceptada |
 
 Formato de cada entrada: contexto, decisión, alternativas descartadas y
 consecuencias. Estados: **Aceptada**, **Pendiente** (decidida pero aún sin
@@ -596,8 +599,8 @@ sale una versión nueva de pgvector o de Postgres.
 **Contexto.** `backend/pyproject.toml` declara las dependencias del backend
 con sus rangos de versiones, la versión de Python y la configuración de las
 herramientas (ruff, pyright, pytest). `uv.lock` guarda la versión exacta que se
-instala, con *hashes*. El CI instala con `uv sync --frozen`, así que sin
-`uv.lock` el job falla.
+instala, con *hashes*. El CI instala con `uv sync --frozen` (desde D-031,
+`uv sync --locked --no-build`), así que sin `uv.lock` el job falla.
 
 **Política.**
 - **`pyproject.toml` con rangos y `uv.lock` con versiones exactas**
@@ -1186,9 +1189,11 @@ sea rápido. Además, los mensajes de commit ya seguían Conventional Commits a 
   `frontend/node_modules` (versiones de `pnpm-lock.yaml`).
 
 Por qué cada pieza:
-- **`uv lock --check`:** el CI instala con `uv sync --frozen`, que usa
+- **`uv lock --check`:** el CI instalaba con `uv sync --frozen`, que usa
   `uv.lock` tal cual sin comprobar que coincide con `pyproject.toml`. Un cambio
   de dependencias sin `uv lock` pasaría el CI con las versiones antiguas.
+  Desde D-031 el CI usa `--locked` y también lo detecta. El hook sigue siendo
+  útil porque avisa antes del commit, sin esperar al CI.
 - **Tipos y tests en `pre-push`, no en `pre-commit`:** necesitan el proyecto
   entero y tardan decenas de segundos. Hacerlo en cada commit sería demasiado
   lento, pero los errores de tipos son justo los que `lint-staged` no ve.
@@ -1211,9 +1216,9 @@ Por qué cada pieza:
 - Tras clonar hay que ejecutar `pnpm install` una vez en la raíz. Sin eso no hay
   hooks: Git no los activa solo.
 - Los hooks se pueden saltar (`--no-verify`), así que el CI sigue siendo la
-  barrera de verdad. El CI no comprueba los mensajes de commit. Hay dos mejoras
-  posibles: un job que valide los mensajes del PR, y `uv sync --locked` en lugar
-  de `--frozen` para que el CI también detecte un `uv.lock` desfasado.
+  barrera de verdad. El CI no comprueba los mensajes de commit. Había dos
+  mejoras posibles. La de `uv sync --locked` en lugar de `--frozen` se aplicó
+  en D-031. La otra, un job que valide los mensajes del PR, sigue pendiente.
 - En Windows, los hooks se ejecutan con el `sh` de Git for Windows y necesitan
   `uv` y `pnpm` en el PATH. Si el editor no los encuentra, hay que reiniciarlo
   después de instalarlos. `.gitattributes` ya fuerza LF, así que los hooks no se
@@ -1357,3 +1362,174 @@ configuración.
   sin esa conexión verá un aviso de la extensión, y no afecta a nada más.
 - El intérprete (`backend/.venv`) se elige a mano (README), porque su ruta
   cambia entre Windows (`Scripts/`) y Linux o macOS (`bin/`).
+
+---
+
+## D-031 · CI del backend: uv con lockfile verificado y sin compilar, y Postgres de pruebas sin contraseña
+
+- **Fecha:** 2026-10-05
+- **Estado:** Aceptada
+
+**Contexto.** Con SonarQube for IDE en modo conectado (D-030), el editor
+mostraba 18 avisos de seguridad en `ci.yml`, de reglas del analizador de
+GitHub Actions de SonarCloud:
+
+| Regla | Qué dice | Dónde saltaba |
+|---|---|---|
+| `githubactions:S8544` (vulnerabilidad, mayor) | Las dependencias de Python deben estar bloqueadas a versiones verificadas | En cada `uv run`: si el lock no coincide, puede volver a resolver |
+| `githubactions:S8541` (vulnerabilidad, mayor) | No ejecutar scripts de paquetes al instalar | En `uv sync` y `uv run` sin `--no-build`: un paquete sin *wheel* se compila desde el código fuente, y eso ejecuta su código |
+| `secrets:S6698` (bloqueante) y `yaml:S2068` | Contraseña de PostgreSQL escrita en el código | En la del servicio de Postgres del job `backend`, en `DATABASE_URL` y en `PGPASSWORD` |
+
+SonarCloud no los veía porque `ci.yml` no está en `sonar.sources`: solo el
+editor. Además, quedaba pendiente una mejora de D-028: con `--frozen`, un
+`uv.lock` desfasado pasaba el CI sin avisar.
+
+**Decisión.**
+- **`uv sync --locked --no-build` y `uv run --locked --no-build`** en los jobs
+  `backend` y `contracts`, y lo mismo en los workflows aplazados (`llm-evals`,
+  y `uvx --no-build` en `load-test`).
+  - **`--locked` en lugar de `--frozen`:** además de instalar exactamente
+    `uv.lock`, falla si no coincide con `pyproject.toml`. La documentación de
+    la regla pone `--frozen` como ejemplo, pero el analizador también acepta
+    `--locked`, que es más estricto.
+  - **`--no-build`:** solo se instalan paquetes precompilados (*wheels*). Antes
+    de aplicarlo se comprobó que los 192 paquetes del lock tienen *wheel* para
+    Linux x86_64 y Python 3.13. La única excepción es `pywin32`, que solo se
+    instala en Windows. Una resolución simulada para Linux con `--no-build`
+    terminó sin errores. El proyecto propio (`tripplanner-backend`) es
+    *virtual* y no se construye.
+- **Postgres del job `backend` sin contraseña** (`POSTGRES_HOST_AUTH_METHOD:
+  trust`): `DATABASE_URL` y `psql` van sin credenciales. La base de datos es
+  efímera, se crea y se destruye con el job y solo es accesible desde el
+  runner.
+
+**Alternativas descartadas.**
+- **Marcar los avisos de contraseña como falsos positivos:** esa contraseña no
+  protegía nada, pero seguiría escrita en el código. Quitarla es más limpio que
+  justificarla.
+- **Sacar la contraseña de un secreto de GitHub:** sería un secreto que no
+  protege nada, y los secretos no llegan a los PRs que vienen de forks.
+- **`--frozen`, como en el ejemplo de la regla:** también cumple, pero no
+  detecta un lockfile desfasado.
+
+**Consecuencias.**
+- Tras el cambio, SonarQube for IDE muestra 0 avisos en `ci.yml`. En el CI,
+  `uv sync --locked --no-build` instala los 188 paquetes sin compilar
+  ninguno.
+- El log del contenedor de Postgres muestra el aviso estándar de la imagen:
+  con `trust`, cualquiera con acceso al puerto entra sin contraseña. Es lo
+  esperado: solo el runner llega a ese puerto, y el contenedor desaparece al
+  acabar el job. Nunca se usa `trust` en el Compose local ni en producción.
+- Si en el futuro una dependencia no publica *wheel* para Linux, el CI fallará
+  en "Instalar dependencias". Habrá que decidir de forma explícita si se
+  permite compilar ese paquete y anotarlo aquí.
+- Los hooks locales siguen con `uv run --frozen`: Sonar no analiza
+  `lint-staged.config.mjs`, y en local es `uv lock --check` quien comprueba
+  que el lockfile está al día (D-028).
+
+---
+
+## D-032 · CodeQL (*default setup*) como capa adicional de análisis de seguridad
+
+- **Fecha:** 2026-10-05
+- **Estado:** Aceptada. Se activó desde la configuración del repositorio en
+  GitHub (*Settings → Code security*), así que no hay ningún workflow en
+  `.github/`.
+
+**Contexto.** La seguridad ya tenía varias capas: SonarCloud (quality gate,
+D-002), Trivy para la infraestructura, las actualizaciones de seguridad de
+Dependabot (D-007) y las Actions fijadas por SHA (D-026). El repositorio es
+público, y en los repositorios públicos GitHub ofrece gratis el *code scanning*
+con CodeQL. CodeQL sigue el flujo de los datos desde las fuentes no fiables
+(peticiones HTTP, parámetros) hasta los puntos peligrosos (consultas SQL,
+comandos del sistema, rutas de fichero). Es justo el tipo de vulnerabilidad que
+puede aparecer en el backend (FastAPI, SQLAlchemy, llamadas a herramientas
+MCP) y en el BFF.
+
+**Decisión.** CodeQL con la *default setup*: GitHub elige y mantiene la
+configuración.
+
+| Parámetro | Valor | Qué significa |
+|---|---|---|
+| Lenguajes | Python, JavaScript/TypeScript y GitHub Actions | Backend, frontend y los propios workflows |
+| Conjunto de consultas | `default` | Las consultas de alta precisión, con pocos falsos positivos. `extended` añade más, con más ruido |
+| Modelo de amenazas | `remote` | Considera no fiables los datos que llegan por la red. `local` añadiría ficheros, variables de entorno y argumentos |
+| Cuándo se ejecuta | En cada PR, en cada push a `main` y una vez por semana | El análisis semanal encuentra problemas nuevos en el código ya mergeado cuando salen consultas nuevas |
+
+Al activarlo: 0 alertas, con 87 reglas en JS/TS, 43 en Python y 17 en Actions
+(CodeQL 2.27.1).
+
+Cómo se reparten el trabajo SonarCloud y CodeQL:
+
+| | SonarCloud | CodeQL |
+|---|---|---|
+| Qué revisa | Calidad (errores, mantenibilidad, duplicación, cobertura) y seguridad | Solo seguridad |
+| ¿Bloquea el merge? | Sí: el quality gate hace fallar el job `sonar`, y con él `ci-ok` | No, de momento: las alertas salen en el PR y en *Security → Code scanning* |
+
+Dos analizadores con técnicas distintas encuentran cosas distintas: es
+defensa en profundidad, y aquí no cuesta nada.
+
+**Alternativas descartadas.**
+- ***Advanced setup*** (un workflow `codeql.yml` propio): permitiría fijar el
+  runner (D-027), referenciar las Actions por SHA (D-026) y elegir rutas y
+  consultas. A cambio, hay que mantenerlo a mano. Con la *default setup* lo
+  mantiene GitHub, y se puede cambiar más adelante.
+- **Conjunto de consultas `extended`:** más cobertura, pero más falsos
+  positivos. Se puede revisar cuando haya más código.
+- **Solo SonarCloud:** una herramienta menos, pero se pierde la segunda
+  opinión, y CodeQL es gratis en este repositorio.
+
+**Consecuencias.**
+- En cada PR aparecen los checks `CodeQL` y `Analyze (…)`, uno por lenguaje.
+- Los jobs de CodeQL corren en `ubuntu-latest`: la *default setup* no permite
+  fijar el runner. Por eso, en el PR #2, sus jobs fueron los únicos que
+  mostraron el aviso de migración a Ubuntu 26. No afecta a nada: el
+  entorno de CodeQL lo gestiona GitHub.
+- Las alertas no bloquean el merge. Si se quiere, el ruleset de `main` admite
+  la regla "Require code scanning results" para bloquear los PRs con alertas
+  graves.
+- Solo es gratis mientras el repositorio sea público. Si pasara a privado,
+  necesitaría GitHub Code Security, que es de pago.
+
+---
+
+## D-033 · `main` protegida con un ruleset: PR obligatorio y `ci-ok` como único check requerido
+
+- **Fecha:** 2026-10-05
+- **Estado:** Aceptada. Se configura en GitHub (*Settings → Rules →
+  Rulesets*, "Main proteccion"); no hay ningún fichero en el repositorio.
+
+**Contexto.** Sin protección, un push directo a `main` se salta el CI. El CI
+resume todos sus jobs en uno, `ci-ok` (D-001), porque los jobs se omiten según
+las rutas que cambian. Exigir cada job por separado bloquearía los PRs en los
+que no se ejecutan: un check obligatorio que nunca aparece deja el PR bloqueado
+para siempre. Es lo que pasaría con "SonarCloud Code Analysis" en un PR que
+solo toca documentación. `ci-ok` se ejecuta siempre (`if: always()`) y falla si
+algún job ha fallado o se ha cancelado.
+
+**Decisión.**
+
+| Regla | Efecto |
+|---|---|
+| Se aplica a la rama por defecto (`~DEFAULT_BRANCH`) | Solo a `main`. Al principio estaba en `~ALL`, todas las ramas, y habría bloqueado las ramas de trabajo |
+| Bloquear el borrado | `main` no se puede borrar |
+| Bloquear el *force-push* | No se puede reescribir el historial de `main` |
+| PR obligatorio, con 0 aprobaciones | Todo cambio entra por PR. Con un solo desarrollador no se exigen aprobaciones, porque uno no puede aprobarse a sí mismo |
+| Check obligatorio: `ci-ok` | El PR no se puede mergear hasta que `ci-ok` pase |
+| Métodos de merge: merge, squash y rebase | Los tres están permitidos. Por convención se usa el merge commit, que conserva los commits de cada PR |
+| *Bypass* para el rol de administrador, siempre | El autor puede saltárselo en una emergencia |
+
+**Alternativas descartadas.**
+- **Exigir cada job o "SonarCloud Code Analysis":** bloquearía los PRs en los
+  que se omiten.
+- **Exigir que la rama esté al día con `main`** (*strict*): obligaría a
+  actualizar la rama antes de cada merge. Con un solo desarrollador casi nunca
+  hay PRs en paralelo, así que no compensa.
+
+**Consecuencias.**
+- Como administrador, el autor puede hacer push directo a `main`, y entonces el
+  CI no se ejecuta antes. Hay que reservarlo para emergencias.
+- Las alertas de CodeQL no forman parte de `ci-ok` (D-032).
+- Si en el futuro se añade un workflow cuyo resultado deba bloquear el merge,
+  su job tiene que entrar en el `needs` de `ci-ok`; no hace falta tocar el
+  ruleset.
