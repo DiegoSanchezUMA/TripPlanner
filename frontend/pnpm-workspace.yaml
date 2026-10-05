@@ -1,0 +1,11 @@
+# Configuración de pnpm (no es un monorepo: solo este paquete).
+#
+# pnpm 10 no ejecuta scripts de instalación de dependencias salvo que se
+# aprueben. Ninguno hace falta: los binarios nativos (esbuild, SWC, el resolver
+# de ESLint) llegan ya compilados como dependencias opcionales, y @scarf/scarf
+# solo envía telemetría. Se declaran ignorados para que quede explícito.
+ignoredBuiltDependencies:
+  - "@scarf/scarf"
+  - "@swc/core"
+  - esbuild
+  - unrs-resolver

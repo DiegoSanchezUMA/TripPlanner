@@ -1,0 +1,320 @@
+# CI principal: se ejecuta en cada PR y en cada push a main.
+# Solo corre los jobs cuya parte del monorepo ha cambiado.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Mínimo privilegio: el GITHUB_TOKEN solo puede leer el repo.
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------
+  # 1. Detecta qué partes del repo han cambiado
+  # ---------------------------------------------------------------
+  changes:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+      docker: ${{ steps.filter.outputs.docker }}
+      contracts: ${{ steps.filter.outputs.contracts }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            backend:
+              - 'backend/**'
+              - '.github/workflows/ci.yml'
+            frontend:
+              - 'frontend/**'
+              - 'shared/**'
+              - '.github/workflows/ci.yml'
+            docker:
+              - 'backend/**'
+              - 'frontend/**'
+              - 'infra/**'
+              - '.github/workflows/ci.yml'
+            contracts:
+              - 'backend/app/agents/models/**'
+              - 'backend/app/models/**'
+              - 'backend/app/api/**'
+              - 'shared/**'
+
+  # ---------------------------------------------------------------
+  # 2. Backend (FastAPI + CrewAI): lint, tipos, tests y cobertura
+  # ---------------------------------------------------------------
+  backend:
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    services:
+      db:
+        image: pgvector/pgvector:0.8.7-pg16-bookworm   # igual que el compose (D-015)
+        env:
+          POSTGRES_USER: tripplanner
+          POSTGRES_PASSWORD: tripplanner
+          POSTGRES_DB: tripplanner_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U tripplanner"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgresql+psycopg://tripplanner:tripplanner@localhost:5432/tripplanner_test
+      # En CI NUNCA hay claves reales de LLM ni MCP: los tests usan mocks.
+      # Así son deterministas, gratis y no dependen de servicios externos.
+      APP_ENV: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.12.23"   # la misma que en local (D-016)
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+
+      - name: Instalar dependencias (lockfile congelado)
+        run: uv sync --frozen --all-extras --dev
+
+      - name: Lint (ruff)
+        run: uv run ruff check .
+
+      - name: Formato (ruff format)
+        run: uv run ruff format --check .
+
+      - name: Tipos (pyright)
+        run: uv run pyright
+
+      - name: Extensión pgvector
+        run: |
+          PGPASSWORD=tripplanner psql -h localhost -U tripplanner -d tripplanner_test \
+            -c "CREATE EXTENSION IF NOT EXISTS vector;"
+
+      - name: Migraciones (Alembic)
+        run: uv run alembic upgrade head
+
+      # Sin umbral aquí: la barrera de cobertura es el quality gate de
+      # SonarQube (job sonar), para que el informe llegue siempre a Sonar.
+      # term-missing sigue mostrando la cobertura en el log.
+      - name: Tests + cobertura
+        run: >
+          uv run pytest
+          --ignore=tests/load
+          --cov=app
+          --cov-report=xml:coverage.xml
+          --cov-report=term-missing
+          --junitxml=junit.xml
+
+      - name: Guardar informes para SonarQube
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-reports
+          path: |
+            backend/coverage.xml
+            backend/junit.xml
+          retention-days: 7
+
+  # ---------------------------------------------------------------
+  # 3. Frontend (Next.js + Storybook): lint, tipos, tests y build
+  # ---------------------------------------------------------------
+  frontend:
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    env:
+      NEXT_TELEMETRY_DISABLED: 1
+      BACKEND_URL: http://localhost:8000
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4   # lee la versión de "packageManager" en frontend/package.json
+        with:
+          package_json_file: frontend/package.json
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24   # la misma que Vercel (D-018)
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Instalar dependencias (lockfile congelado)
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Tipos (tsc --noEmit)
+        run: pnpm typecheck
+
+      - name: Tests + cobertura
+        run: pnpm test:coverage
+
+      - name: Build Next.js
+        run: pnpm build
+
+      - name: Build Storybook
+        run: pnpm build-storybook --quiet
+
+      - name: Guardar informes para SonarQube
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-reports
+          path: frontend/coverage/lcov.info
+          retention-days: 7
+
+  # ---------------------------------------------------------------
+  # 4. Contratos: los tipos TS de shared/types deben coincidir con los
+  #    schemas Pydantic (fuente de verdad). Se activa solo cuando exista
+  #    el script de exportación y el generador.
+  # ---------------------------------------------------------------
+  contracts:
+    needs: changes
+    if: needs.changes.outputs.contracts == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: ¿Existe ya la generación de tipos?
+        id: check
+        run: |
+          if [ -f shared/package.json ] && [ -f backend/scripts/export_schemas.py ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Generación de contratos aún no configurada, se omite."
+          fi
+
+      - uses: astral-sh/setup-uv@v6
+        if: steps.check.outputs.enabled == 'true'
+        with:
+          version: "0.12.23"   # D-016
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+
+      - uses: pnpm/action-setup@v4
+        if: steps.check.outputs.enabled == 'true'
+        with:
+          package_json_file: shared/package.json
+
+      - uses: actions/setup-node@v4
+        if: steps.check.outputs.enabled == 'true'
+        with:
+          node-version: 24   # D-018
+          cache: pnpm
+          cache-dependency-path: shared/pnpm-lock.yaml
+
+      - name: Regenerar JSON Schema y tipos TS
+        if: steps.check.outputs.enabled == 'true'
+        run: |
+          (cd backend && uv sync --frozen && uv run python scripts/export_schemas.py --out ../shared/schemas)
+          (cd shared && pnpm install --frozen-lockfile && pnpm generate)
+
+      - name: Comprobar que no hay diferencias
+        if: steps.check.outputs.enabled == 'true'
+        run: |
+          if ! git diff --exit-code -- shared; then
+            echo "::error::Los tipos TS no coinciden con los schemas Pydantic. Ejecuta la generación en local y haz commit."
+            exit 1
+          fi
+
+  # ---------------------------------------------------------------
+  # 5. Docker: valida el compose y construye en ARM64 (igual que la VM
+  #    de Oracle). Trivy analiza la configuración de infra/.
+  # ---------------------------------------------------------------
+  docker:
+    needs: changes
+    if: needs.changes.outputs.docker == 'true'
+    runs-on: ubuntu-24.04-arm   # runner ARM gratuito en repos públicos
+    defaults:
+      run:
+        working-directory: infra/docker
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Preparar .env de ejemplo
+        run: cp ../env/.env.example ../env/.env
+
+      - name: Validar compose (base y, si existe, producción)
+        run: |
+          docker compose --env-file ../env/.env -f docker-compose.yml config --quiet
+          if [ -f docker-compose.prod.yml ]; then
+            docker compose --env-file ../env/.env -f docker-compose.yml -f docker-compose.prod.yml config --quiet
+          fi
+
+      - name: Construir imágenes propias (si las hay)
+        run: docker compose --env-file ../env/.env -f docker-compose.yml build
+
+      - name: Analizar Dockerfiles y compose (Trivy)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: config
+          scan-ref: infra
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+
+  # ---------------------------------------------------------------
+  # 6. SonarQube Cloud: calidad, duplicación, cobertura y quality gate
+  # ---------------------------------------------------------------
+  sonar:
+    needs: [backend, frontend]
+    # Corre aunque uno de los dos se haya omitido, pero no si alguno falló.
+    # Los PRs desde forks no tienen acceso al token, así que se omiten.
+    if: >
+      always() &&
+      !contains(needs.*.result, 'failure') &&
+      !contains(needs.*.result, 'cancelled') &&
+      (needs.backend.result == 'success' || needs.frontend.result == 'success') &&
+      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # Sonar necesita el historial para el "new code"
+
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: backend-reports
+          path: backend
+
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: frontend-reports
+          path: frontend/coverage
+
+      - name: Análisis SonarQube Cloud
+        uses: SonarSource/sonarqube-scan-action@v5
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+  # ---------------------------------------------------------------
+  # 7. Resumen: un único check para marcar como obligatorio en main
+  # ---------------------------------------------------------------
+  ci-ok:
+    needs: [backend, frontend, contracts, docker, sonar]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Comprobar resultado
+        run: |
+          if ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}; then
+            echo "Algún job ha fallado"; exit 1
+          fi
+          echo "CI correcto"

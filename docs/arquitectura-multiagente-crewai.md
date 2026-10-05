@@ -24,30 +24,39 @@ queda corto.
 
 - «¿El hotel del día 2 tiene desayuno?» → una lectura de estado, ~600 tokens, ~1 s.
 - «Cámbiame el vuelo de vuelta» → `RefinementCrew` con 3 agentes, ~5 000 tokens, 8–20 s.
-- Generar el itinerario completo → `PlanningCrew` con 7 agentes y 8 tareas, ~25 000
+- Generar el itinerario completo → `PlanningCrew` con 8 agentes y 8 tareas, ~25 000
   tokens, 60–110 s.
 
 Tres capas por encima de un catálogo de agentes:
 
 | Capa | Responsabilidad | Naturaleza |
 |---|---|---|
-| 0 · Catálogo | Definición única de los 7 agentes | Configuración (YAML) |
+| 0 · Catálogo | Definición única de los 8 agentes | Configuración (YAML) |
 | 1 · Decisión | El Flow (`@router classify_intent`) clasifica la intención y elige la rama. Aquí y solo aquí se decide | Código + 1 llamada LLM barata |
 | 2 · Composición | Selecciona agentes y tareas del catálogo para montar la crew adecuada | Código puro |
 | 3 · Ejecución | La crew recorre su grafo de tareas de forma secuencial. No elige nada | Agentes LLM |
 
-## 1. Los siete agentes
+## 1. Los ocho agentes
 
 Un agente por servidor MCP (correspondencia 1:1 con los actores del diagrama de
-casos de uso del módulo 4), más planificador, compositor y revisor. **No seis, no
-ocho: exactamente siete.**
+casos de uso del módulo 4), más planificador, compositor y revisor. **No siete, no
+nueve: exactamente ocho.**
+
+> **Cambio pendiente de desarrollar (D-020, 2026-10-04).** El antiguo *Places &
+> Routes Specialist* (Google Maps Platform MCP) se divide en **Places Specialist**
+> (Geoapify MCP) y **Routes Specialist** (Transitous MCP). Motivo: con facturación
+> en el EEE, los términos de Google Maps Platform no permiten usar el contenido de
+> Places API (nombres, horarios, accesibilidad) en un planificador de viajes, ni
+> guardarlo. Al ser dos servidores MCP distintos, la regla "un agente por servidor
+> MCP" obliga a dos agentes. Detalle en `docs/decisiones/decisiones.md` (D-020).
 
 | Agente | Rol (`Role`) | Responsabilidad | Herramientas | Modelo / temp | Requisitos |
 |---|---|---|---|---|---|
 | **Travel Planner** | Senior Trip Scoping Analyst | Convierte el briefing + hard facts en un esqueleto día a día (T1). **No elige lugares, vuelos ni precios.** No ensambla el itinerario final. | Ninguna | Medio, reasoning activo (máx. 3 intentos) · temp 0.2 | RNF-5.10, RF-02.x |
 | **Flight Specialist** | Air Travel Logistics Specialist | Vuelos ida/vuelta reales, precios, horarios, escalas | Flight MCP (`@mcp/octotrip`) — sin lector web | Medio · temp 0.1 | RF-04.01–04.03 |
 | **Hotel Specialist** | Accommodation Availability Specialist | Alojamiento con disponibilidad confirmada y coordenadas | Hotel MCP (`@mcp/winwin-travel`) — sin lector web | Medio · temp 0.1 | RF-04.04–04.06 |
-| **Places & Routes Specialist** | Destination Curator and Urban Mobility Analyst | Puntos de interés, horarios, traslados. Único agente con lector web (acotado) | Google Maps Platform MCP + `bounded_web_reader` | Medio · temp 0.1 | RF-04.07–04.11 |
+| **Places Specialist** | Destination Curator | Puntos de interés, horarios de apertura, accesibilidad y coordenadas (datos de OpenStreetMap). Único agente con lector web (acotado) | Places MCP (Geoapify, solo herramientas de lugares y geocodificación) + `bounded_web_reader` | Medio · temp 0.1 | RF-04.07–04.09 |
+| **Routes Specialist** | Urban Mobility Analyst | Tiempos de desplazamiento a pie y en transporte público entre puntos consecutivos, con la línea concreta | Routes MCP (Transitous) — sin lector web | Pequeño/medio · temp 0.0 | RF-04.10–04.11 |
 | **Weather Specialist** | Destination Weather Analyst | Clasifica cada día como interior/exterior con confianza | Weather MCP | Pequeño/medio · temp 0.0 | RF-04.12–04.13 |
 | **Itinerary Composer** | Itinerary Composer | Ensambla el itinerario final (T7); aplica los parches del refinamiento (R1, R3) | Ninguna | Grande, contexto largo · temp 0.3 | RNF-2.04 |
 | **Itinerary Reviewer** | Itinerary Feasibility Auditor | Audita viabilidad con rúbrica LLM-as-a-Judge (T8). **Nunca reescribe.** | `schedule_validator` + `tool_call_ledger_reader` (solo lectura) | Grande, **familia de modelo distinta** a la del Composer · temp 0.0, reasoning (máx. 2) | RNF-6.18, RNF-7.12 |
@@ -67,12 +76,14 @@ datos no encajan) — mismo motivo por el que el revisor usa una familia de mode
 distinta al compositor. Precedente del curso DeepLearning.AI/CrewAI: Deep Research
 Crew separa *Research Planner* y *Report Writer*.
 
-Regla general: **no es "una tarea, un agente" sino "un agente por competencia"**. T5
-(seleccionar actividades) y T6 (calcular traslados) son del mismo agente (Places &
-Routes) porque comparten dominio y herramientas — la atomicidad vive en la capa de
-tareas, no en la de agentes.
+Regla general: **no es "una tarea, un agente" sino "un agente por competencia"**, y la
+competencia la marca el servidor MCP. T5 (seleccionar actividades) y T6 (calcular
+traslados) eran del mismo agente mientras compartían servidor (Google Maps); desde
+D-020 usan servidores distintos (Geoapify y Transitous), así que son de agentes
+distintos. Lo que no cambia: la atomicidad vive en la capa de tareas, y un agente
+nunca tiene dos servidores MCP.
 
-`allow_delegation = false` en los 7. Ningún agente delega en otro; la coordinación
+`allow_delegation = false` en los 8. Ningún agente delega en otro; la coordinación
 pasa por el `context` de las tareas, nunca por delegación libre (fuente habitual de
 bucles infinitos).
 
@@ -97,8 +108,8 @@ un grafo auditable, no en la improvisación de un gestor.
 | **T2** `search_flights` | Flight Specialist | `FlightOptions`: 3–5 opciones reales o `gap` | T1 | **sí** |
 | **T3** `search_hotels` | Hotel Specialist | `HotelOptions`: 3–5 propiedades con coordenadas | T1 | **sí** |
 | **T4** `forecast_weather` | Weather Specialist | `WeatherWindow`: 1 entrada/día, recomendación + confianza | T1 | **sí** |
-| **T5** `curate_activities` | Places & Routes | `ActivityPool`: 2–3 candidatos por slot, anclados al hotel | T1, T3, T4 | no |
-| **T6** `compute_transfers` | Places & Routes | `TransferMatrix`: tiempo y medio de transporte entre pares consecutivos | T5 | no |
+| **T5** `curate_activities` | Places Specialist | `ActivityPool`: 2–3 candidatos por slot, anclados al hotel | T1, T3, T4 | no |
+| **T6** `compute_transfers` | Routes Specialist | `TransferMatrix`: tiempo, medio de transporte y línea entre pares consecutivos | T5 | no |
 | **T7** `assemble_itinerary` | Itinerary Composer | `Itinerary` completo: horarios, traslados, desglose de coste, `gaps[]`, `deviations[]` | T1–T6 | no |
 | **T8** `audit_itinerary` | Itinerary Reviewer | `ReviewVerdict`: aprobado/rechazado + 5 puntuaciones + defectos concretos | T7 | no |
 
@@ -120,14 +131,23 @@ Detalles de diseño que importan:
 
 Un usuario refina un itinerario muchas más veces de las que lo genera: aquí se
 decide si el sistema es económicamente viable. Se ensambla en tiempo de ejecución
-con solo 3 agentes: **Composer + especialista según intención + Reviewer**. El
-Travel Planner **no participa** (el esqueleto ya existe).
+con 3 o 4 agentes: **Composer + especialista según intención + Routes Specialist
+(solo si el cambio mueve ubicaciones) + Reviewer**. El Travel Planner **no
+participa** (el esqueleto ya existe).
+
+| Intención | Especialista de R2 | ¿R2b (Routes)? |
+|---|---|---|
+| `modify_transport` | Flight Specialist | No |
+| `modify_lodging` | Hotel Specialist | Sí: cambian los traslados desde y hacia el hotel |
+| `modify_activities` | Places Specialist | Sí |
+| `reschedule` | Places Specialist (horarios para la nueva franja) | Sí, si cambia el orden de las visitas |
 
 | Tarea | Agente | Qué hace | Salida |
 |---|---|---|---|
 | **R1** `interpret_change` | Composer | Identifica qué ítems afecta el mensaje y qué se pide; si es ambiguo devuelve `needs_clarification` con la pregunta. No cambia nada. | `ChangeRequest` |
 | **R2** `requery_<dominio>` | Especialista seleccionado | Alternativas solo para los ítems afectados, respetando restricciones originales + nuevas | `OptionSet` |
-| **R3** `patch_itinerary` | Composer | Aplica el parche elegido; recalcula traslados/coste solo del día afectado y vecinos | `ItineraryPatch` |
+| **R2b** `requery_transfers` | Routes Specialist | Solo cuando el cambio altera la ubicación o el orden de algún ítem: traslados de los pares afectados | `TransferMatrix` |
+| **R3** `patch_itinerary` | Composer | Aplica el parche elegido; integra los traslados de R2b y recalcula el coste solo del día afectado y vecinos | `ItineraryPatch` |
 | **R4** `audit_patch` | Reviewer | Misma rúbrica que T8, pero solo sobre los días tocados | `ReviewVerdict` |
 
 La salida es un **parche, no un itinerario completo**: regenerar todo costaría igual
@@ -140,7 +160,7 @@ persiste en el historial de revisiones (§7).
 | Componente | Perfil | Temp | Motivo |
 |---|---|---|---|
 | `@router classify_intent` | pequeño/rápido (Groq 8B) | 0.0 | Camino crítico de toda interacción; clasificar, no razonar |
-| Especialistas (vuelos, hotel, lugares, clima) | medio (Gemini Flash / GPT-mini) | 0.1 | Invocan herramientas y estructuran; creatividad = defecto aquí |
+| Especialistas (vuelos, hotel, lugares, clima, rutas) | medio (Gemini Flash / GPT-mini) | 0.1 | Invocan herramientas y estructuran; creatividad = defecto aquí |
 | Travel Planner | medio, reasoning | 0.2 | Entrada pequeña; no necesita contexto largo |
 | Itinerary Composer | grande, contexto largo (Gemini Pro / GPT-4) | 0.3 | Único que ve las 6 salidas heterogéneas a la vez |
 | Itinerary Reviewer | grande, **otra familia** que el Composer | 0.0 | Un juez del mismo modelo comparte los puntos ciegos del autor |
@@ -185,8 +205,8 @@ tiene"* no lo es.
 
 El raspado (`bounded_web_reader`) **no es una excepción al control**: es una
 herramienta más, con dominios permitidos y tope de peticiones, que registra sus
-llamadas en el `tool_ledger` como cualquier cliente MCP. Solo la tiene el **Places &
-Routes Specialist**.
+llamadas en el `tool_ledger` como cualquier cliente MCP. Solo la tiene el **Places
+Specialist**.
 
 | Dominio | ¿Raspado? | Razón |
 |---|---|---|
@@ -205,7 +225,7 @@ la interfaz lo señala con un distintivo. Nunca se usa para precios ni disponibi
 
 | Guardrail | Qué comprueba | Se aplica en | Requisito |
 |---|---|---|---|
-| `grounding_guardrail` | Todo `place_id`/`flight_number`/`hotel_id` existe en el `tool_ledger` de esta ejecución, con `source` correcto | T2, T3, T5, T7 | RNF-1.04 |
+| `grounding_guardrail` | Todo `place_id`/`flight_number`/`hotel_id`/línea de transporte existe en el `tool_ledger` de esta ejecución, con `source` correcto | T2, T3, T5, T6, T7 | RNF-1.04 |
 | `schedule_guardrail` | Sin solapes; dentro de horario de apertura; día 1 tras llegada+traslado; último día antes de check-in de vuelta | T7 | RF-04.08, 04.10 |
 | `budget_guardrail` | Desglose suma el total (±1 €) y no supera el techo | T7 | RF-02.17 |
 | `diet_guardrail` | Toda comida cumple la restricción dietética declarada | T5, T7 | RF-02.06 |
@@ -215,7 +235,7 @@ la interfaz lo señala con un distintivo. Nunca se usa para precios ni disponibi
 | `coverage_guardrail` | Un registro por día (clima) o por par consecutivo (traslados), sin huecos | T4, T6 | RF-04.10, 04.12 |
 | `min_options_guardrail` | Entre 3 y 5 opciones | T2, T3 | RNF-2.04 |
 | `schema_guardrail` | Validación Pydantic estricta | todas | RNF-1.03, 3.7 |
-| `source_guardrail` | Todo valor factual lleva `source`+`confidence`; nada `scraped` en precio/disponibilidad | T2, T3, T5, T7 | RNF-1.04, 4.15 |
+| `source_guardrail` | Todo valor factual lleva `source`+`confidence`; nada `scraped` en precio/disponibilidad | T2, T3, T5, T6, T7 | RNF-1.04, 4.15 |
 | `gap_guardrail` | Una laguna declarada se arrastra, nunca se rellena con un valor | T7 | RNF-5.7 |
 | `verdict_guardrail` | Coherencia veredicto ↔ puntuaciones del revisor | T8 | RNF-6.18 |
 
@@ -560,7 +580,9 @@ class TravelPlannerFlow(Flow[TravelPlannerState]):
                 'modify_activities', 'reschedule'))
     def run_refinement_crew(self):
         specialist = SPECIALIST_BY_INTENT[self.state.intent.kind]
-        crew = RefinementCrew(self.state.user_id, specialist, self.state.ledger).crew()
+        with_routes = moves_locations(self.state.intent)   # R2b (§3, D-020)
+        crew = RefinementCrew(self.state.user_id, specialist, with_routes,
+                              self.state.ledger).crew()
         return self._apply_review_loop(crew.kickoff(inputs=self.state.as_inputs()))
 
     def _apply_review_loop(self, result):
@@ -654,12 +676,12 @@ class PlanningCrew:
 
 Recorrer tras generar en CrewAI Studio y antes de dar el diseño por implementado:
 
-- [ ] Exactamente **7 agentes**; borrar cualquier agente genérico añadido por el generador.
+- [ ] Exactamente **8 agentes**; borrar cualquier agente genérico añadido por el generador.
 - [ ] Travel Planner e Itinerary Composer con lista de herramientas **vacía**; Reviewer solo con las dos deterministas de lectura.
-- [ ] Solo Places & Routes tiene el lector web acotado; **ningún** agente tiene buscador genérico.
+- [ ] Solo Places Specialist tiene el lector web acotado; **ningún** agente tiene buscador genérico.
 - [ ] T1 la ejecuta Travel Planner, T7 el Composer (si Studio los fusionó, separar).
-- [ ] Cada especialista con **un único** servidor MCP conectado.
-- [ ] `allow_delegation = false` en los 7.
+- [ ] Cada especialista con **un único** servidor MCP conectado. Places Specialist recibe solo las herramientas de lugares y geocodificación de Geoapify, no las de rutas.
+- [ ] `allow_delegation = false` en los 8.
 - [ ] Solo T2, T3, T4 con `async_execution = true`.
 - [ ] Dependencias exactas: T5 ← T1,T3,T4 · T7 ← T1–T6 · T8 ← T7.
 - [ ] Ninguna `expected output` dice "un informe" o "una lista": todas enumeran campos con tipo, con `output_pydantic` asignado.
@@ -675,7 +697,7 @@ el apartado correspondiente de arriba.)
 
 - **No** usa `Process.hierarchical` (§2). Queda como variante para comparar en pruebas.
 - **No** usa agente formateador (§8): solo Pydantic.
-- **No** enruta herramientas por embeddings (ScaleMCP): con 4 MCP el catálogo no
+- **No** enruta herramientas por embeddings (ScaleMCP): con 5 MCP el catálogo no
   satura el contexto. Trabajo futuro.
 - **No** usa protocolos entre agentes (A2A, ACP, ANP): no existe aún un ecosistema de
   agentes comerciales turísticos con los que negociar.
@@ -693,9 +715,10 @@ texto propuesto está en el documento original v2, capítulo 12):
 
 | Dónde | Dice hoy | Debe decir |
 |---|---|---|
-| Cap. 2, Roles | "un planificador, uno o dos especializados y un crítico" | Un planificador, **4 especialistas** (uno por MCP), **un compositor**, un crítico |
+| Cap. 2, Roles | "un planificador, uno o dos especializados y un crítico" | Un planificador, **5 especialistas** (uno por MCP), **un compositor**, un crítico |
 | Cap. 2, Roles | El planificador "descompone y consolida" | Separar: el planificador **solo** descompone (T1); el compositor consolida (T7) |
-| Cap. 3, módulo 4 | "Agente de logística" + "Agente de destino" (2 agentes) | Un especialista **por servidor MCP** (4 agentes) |
+| Cap. 3, módulo 4 | "Agente de logística" + "Agente de destino" (2 agentes) | Un especialista **por servidor MCP** (5 agentes) |
+| Cap. 3, módulo 4 y diagramas UML | Google Maps Platform MCP para lugares y rutas | **Places MCP (Geoapify)** y **Routes MCP (Transitous)**, con datos abiertos; motivo: términos de Google Maps en el EEE (D-020) |
 | Cap. 2, Coordinación | "Topología estrictamente jerárquica" | Conceptualmente jerárquica, **implementada con proceso secuencial + async** |
 | Cap. 2, Agente crítico | Mezcla juez, hooks y guardrails | Tres mecanismos distintos: juez con rúbrica (tarea), guardrails (tareas), hooks (crew) |
 | Cap. 3, RNF-1.04 | Temperatura baja + prompt que prohíbe inventar | Añadir el **guardrail de anclaje** como mecanismo verificable |

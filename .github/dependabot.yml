@@ -1,0 +1,14 @@
+# Mantiene al día solo las versiones de las propias Actions (poco ruido).
+# Las alertas y parches de seguridad de npm/uv ya los cubre Dependabot
+# security updates desde la configuración del repo.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: "ci"
