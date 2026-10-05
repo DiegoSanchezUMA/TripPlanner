@@ -1,0 +1,32 @@
+# Antes de subir: tipos y tests unitarios de las partes que cambian en lo que
+# se va a subir (D-028). Necesitan el proyecto entero, así que no caben en
+# pre-commit. Para saltarlo en un apuro: git push --no-verify.
+
+z40=0000000000000000000000000000000000000000
+changed=""
+
+# Git pasa por stdin una línea por rama que se sube:
+# <ref local> <sha local> <ref remota> <sha remota>
+while read -r local_ref local_sha remote_ref remote_sha; do
+  # Se borra una rama remota: no hay nada que comprobar.
+  [ "$local_sha" = "$z40" ] && continue
+  if [ "$remote_sha" = "$z40" ] || ! git cat-file -e "$remote_sha" 2>/dev/null; then
+    # Rama nueva en el remoto (o su último commit no está en local): se
+    # compara con main.
+    base=$(git merge-base origin/main "$local_sha")
+  else
+    base=$remote_sha
+  fi
+  changed="$changed
+$(git diff --name-only "$base" "$local_sha")"
+done
+
+if echo "$changed" | grep -q '^backend/'; then
+  echo "pre-push: backend (pyright + pytest)"
+  (cd backend && uv run --frozen pyright && uv run --frozen pytest --ignore=tests/load -q)
+fi
+
+if echo "$changed" | grep -q -E '^(frontend|shared)/'; then
+  echo "pre-push: frontend (tipos + vitest)"
+  (cd frontend && pnpm typecheck && pnpm exec vitest run)
+fi

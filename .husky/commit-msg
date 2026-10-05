@@ -1,0 +1,2 @@
+# Comprueba que el mensaje sigue Conventional Commits (commitlint.config.mjs).
+pnpm exec commitlint --edit "$1"

@@ -34,6 +34,7 @@ arquitectura multiagente viven en `docs/arquitectura-multiagente-crewai.md`.
 | D-025 | Entorno de desarrollo local en Windows: uv, Corepack y `.venv` | Aceptada |
 | D-026 | Actions fijadas por SHA de commit y actualizadas a sus últimas versiones | Aceptada |
 | D-027 | Runners fijados a `ubuntu-24.04` en lugar de `ubuntu-latest` | Aceptada |
+| D-028 | Hooks de Git con Husky: lint-staged, commitlint y pre-push por partes | Aceptada |
 
 Formato de cada entrada: contexto, decisión, alternativas descartadas y
 consecuencias. Estados: **Aceptada**, **Pendiente** (decidida pero aún sin
@@ -1148,3 +1149,75 @@ Además, durante la migración, unos jobs correrían en 24.04 y otros en 26.04.
   retirada de 24.04.
 - Python, Node, uv y pnpm no dependen del runner: los fijan las Actions (D-016,
   D-018).
+
+---
+
+## D-028 · Hooks de Git con Husky: lint-staged, commitlint y pre-push por partes
+
+- **Fecha:** 2026-10-05
+- **Estado:** Aceptada
+
+**Contexto.** El CI detecta los errores, pero después del push: cada fallo
+cuesta varios minutos y deja un PR en rojo. Interesa detectar lo mismo en local,
+antes del commit, por separado para el backend (uv, ruff, pyright, pytest) y el
+frontend (pnpm, ESLint, tsc, Vitest), y revisando solo lo que cambia para que
+sea rápido. Además, los mensajes de commit ya seguían Conventional Commits a mano
+(`feat:`, `chore:`, `ci:`), igual que Dependabot (prefijo `ci`, D-007).
+
+**Decisión.**
+- **Husky 9** en un `package.json` de herramientas en la raíz
+  (`tripplanner-tooling`), con su propio `pnpm-lock.yaml`. No es un workspace de
+  pnpm: `frontend/` sigue siendo un proyecto independiente, con su propio
+  `package.json`, lockfile y `pnpm-workspace.yaml`, así que el CI y Vercel no
+  cambian. Al hacer `pnpm install` en la raíz se ejecuta `prepare: husky`, que
+  apunta Git a `.husky/_` (`core.hooksPath`).
+- **Tres hooks:**
+
+| Hook | Cuándo | Qué hace | Tiempo |
+|---|---|---|---|
+| `pre-commit` | `git commit` | `lint-staged`, solo sobre los ficheros preparados. `backend/**/*.py`: `ruff check --fix` y `ruff format`. `backend/pyproject.toml` o `uv.lock`: `uv lock --check`. `frontend/**/*.{ts,tsx,js,mjs,cjs}`: `eslint --fix`. Los arreglos automáticos se añaden al commit. Si queda algún error, el commit se cancela y los ficheros quedan como estaban. | Segundos |
+| `commit-msg` | `git commit` | `commitlint` con `config-conventional`: formato `tipo(ámbito): resumen`, tipo de una lista cerrada, resumen que no empiece en mayúscula y líneas de 100 caracteres como máximo. | < 1 s |
+| `pre-push` | `git push` | Mira qué cambia en lo que se va a subir. Si toca `backend/`: `pyright` y `pytest` (sin los tests de carga). Si toca `frontend/` o `shared/`: `next typegen` + `tsc` y Vitest. | 15–50 s |
+
+- **Mismas herramientas y versiones que el CI:** ruff y pyright se ejecutan con
+  `uv run --frozen` (versiones de `uv.lock`); ESLint, tsc y Vitest, desde
+  `frontend/node_modules` (versiones de `pnpm-lock.yaml`).
+
+Por qué cada pieza:
+- **`uv lock --check`:** el CI instala con `uv sync --frozen`, que usa
+  `uv.lock` tal cual sin comprobar que coincide con `pyproject.toml`. Un cambio
+  de dependencias sin `uv lock` pasaría el CI con las versiones antiguas.
+- **Tipos y tests en `pre-push`, no en `pre-commit`:** necesitan el proyecto
+  entero y tardan decenas de segundos. Hacerlo en cada commit sería demasiado
+  lento, pero los errores de tipos son justo los que `lint-staged` no ve.
+- **Sin formateador en el frontend:** el proyecto no usa Prettier, solo ESLint
+  (D-023), y añadirlo no forma parte de esta decisión.
+
+**Alternativas descartadas.**
+- **El framework `pre-commit` de Python:** es el estándar en Python y admite
+  hooks de cualquier lenguaje, pero añade otra herramienta y otro fichero de
+  versiones. Husky y `lint-staged` cubren lo mismo con pnpm, que ya se usa.
+- **Husky dentro de `frontend/package.json`** (`prepare: cd .. && husky
+  frontend/.husky`): evita el `package.json` de la raíz, pero los hooks del
+  backend vivirían dentro de `frontend/` y las herramientas de commit se
+  mezclarían con las dependencias de la aplicación, que se instalan en Vercel.
+- **Un workspace de pnpm en la raíz** con `frontend` como paquete: movería el
+  lockfile del frontend a la raíz y obligaría a cambiar el CI, Vercel y D-024.
+
+**Consecuencias.**
+- Tras clonar hay que ejecutar `pnpm install` una vez en la raíz. Sin eso no hay
+  hooks: Git no los activa solo.
+- Los hooks se pueden saltar (`--no-verify`), así que el CI sigue siendo la
+  barrera de verdad. El CI no comprueba los mensajes de commit. Hay dos mejoras
+  posibles: un job que valide los mensajes del PR, y `uv sync --locked` en lugar
+  de `--frozen` para que el CI también detecte un `uv.lock` desfasado.
+- En Windows, los hooks se ejecutan con el `sh` de Git for Windows y necesitan
+  `uv` y `pnpm` en el PATH. Si el editor no los encuentra, hay que reiniciarlo
+  después de instalarlos. `.gitattributes` ya fuerza LF, así que los hooks no se
+  rompen por CRLF.
+- `engines` pide Node 24, como el frontend (D-018). Con Node 22, pnpm avisa,
+  pero las herramientas funcionan: `lint-staged` pide Node 22.22.1 o superior y
+  `commitlint`, 22.12 o superior.
+- Next.js sigue tomando `frontend/` como raíz a pesar del lockfile de la raíz:
+  comprobado con `next build`, que no da ningún aviso.
+- Dependabot no actualiza estas dependencias (D-007).

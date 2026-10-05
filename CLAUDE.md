@@ -92,6 +92,7 @@ aísla por usuario — ver documento de arquitectura §5 antes de tocar esto).
   `docs/requisitos.md` (qué construir) y `docs/data-model/modelo-datos.md` (esquema).
 
 ## Comandos
+- `pnpm install` (en la raíz) — instala Husky y activa los hooks de Git (D-028)
 - `docker compose up -d --build` — levantar entorno local
 - `docker compose ps` / `docker stats --no-stream` — estado y consumo
 - `make test` — tests backend (pytest) y frontend (Vitest + Testing Library)

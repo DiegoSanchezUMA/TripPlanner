@@ -96,6 +96,18 @@ cd infra/docker
 docker compose --env-file ../env/.env up -d
 ```
 
+### Hooks de Git (local)
+
+Husky ejecuta en local una versión rápida del CI, separada por backend y
+frontend (D-028). Se activa una vez tras clonar, con `pnpm install` en la raíz
+del repo.
+
+| Hook | Backend | Frontend |
+|---|---|---|
+| `pre-commit` (ficheros preparados) | `ruff check --fix`, `ruff format`; `uv lock --check` si cambian las dependencias | `eslint --fix` |
+| `commit-msg` | Conventional Commits (`commitlint`) | Igual |
+| `pre-push` (solo la parte que cambia) | `pyright`, `pytest` | `next typegen` + `tsc`, Vitest |
+
 ---
 
 ## 4. Integración y entrega continua
