@@ -1,14 +1,8 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "lib": [
-      "dom",
-      "dom.iterable",
-      "esnext"
-    ],
-    "types": [
-      "node"
-    ],
+    "lib": ["dom", "dom.iterable", "esnext"],
+    "types": ["node"],
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "noEmit": true,
@@ -26,9 +20,7 @@
       }
     ],
     "paths": {
-      "@/*": [
-        "./src/*"
-      ]
+      "@/*": ["./src/*"]
     },
     "allowJs": true
   },
@@ -40,10 +32,5 @@
     ".next/types/**/*.ts",
     ".next/dev/types/**/*.ts"
   ],
-  "exclude": [
-    "node_modules",
-    ".claude",
-    "storybook-static",
-    "coverage"
-  ]
+  "exclude": ["node_modules", ".claude", "storybook-static", "coverage"]
 }
