@@ -1574,7 +1574,7 @@ aprovechar la caché tanto en local como en el CI.
 | *Cache mount* de la caché de uv | Sobrevive entre builds de la misma máquina: un cambio en el lock solo descarga lo nuevo. Además, la caché no acaba dentro de la imagen |
 | `Dockerfile.dockerignore` como lista blanca | Solo entran `app/`, `alembic.ini`, `pyproject.toml` y `uv.lock`. Los tests, `.venv` o los informes no invalidan la caché ni engordan el contexto |
 | `UV_COMPILE_BYTECODE=1` | Los `.pyc` se generan al construir, así que el contenedor arranca antes |
-| En el CI, BuildKit con la caché de GitHub Actions (`type=gha`, `mode=max`) | Las capas, también las del `builder`, se reutilizan entre ejecuciones del CI |
+| En el CI, BuildKit con la caché de GitHub Actions (`type=gha`, `mode=max`) | Las capas, también las del `builder`, se reutilizan entre ejecuciones del CI. Medido en el PR #4: el job `docker` tarda 3 min 57 s la primera vez (110 s solo en subir la caché) y 77 s en la segunda, con todos los pasos `CACHED` y 1 s de exportación |
 
 - **La máquina adecuada para construir:** en el CI, la imagen se construye en el
   runner `ubuntu-24.04-arm`, que es ARM64 nativo como la VM (D-006). Así no hay
