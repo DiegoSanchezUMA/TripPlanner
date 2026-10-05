@@ -41,6 +41,7 @@ arquitectura multiagente viven en `docs/arquitectura-multiagente-crewai.md`.
 | D-032 | CodeQL (*default setup*) como capa adicional de análisis de seguridad | Aceptada |
 | D-033 | `main` protegida con un ruleset: PR obligatorio y `ci-ok` como único check requerido | Aceptada |
 | D-034 | Imagen del backend: Dockerfile multietapa (builder/runner) con caché de capas, y servicio `api` en el Compose | Aceptada |
+| D-035 | Contenedor de la API de solo lectura, con `/tmp` en memoria como único sitio escribible para CrewAI | Aceptada |
 
 Formato de cada entrada: contexto, decisión, alternativas descartadas y
 consecuencias. Estados: **Aceptada**, **Pendiente** (decidida pero aún sin
@@ -1627,3 +1628,75 @@ aprovechar la caché tanto en local como en el CI.
   etiquetas del Dockerfile.
 - Sigue pendiente para el CD (D-005): `docker-compose.prod.yml`, Caddy, la VM y
   los secretos.
+
+---
+
+## D-035 · Contenedor de la API de solo lectura, con `/tmp` en memoria como único sitio escribible para CrewAI
+
+- **Fecha:** 2026-10-05
+- **Estado:** Aceptada
+
+**Contexto.** La imagen de D-034 se ejecuta con el usuario `app`, que no tiene
+carpeta personal (`HOME=/home/app` no existe), y con `/app` de solo lectura.
+Todo el estado de la aplicación vive en PostgreSQL. Pero CrewAI 1.15.23
+escribe en disco, y no solo al usar la memoria. Comprobado en el contenedor:
+
+| Cuándo escribe | Qué escribe | Dónde, sin configurar nada |
+|---|---|---|
+| **Al importarse** (`import crewai`) | Crea su carpeta de datos: `crewai/rag/chromadb/constants.py` llama a `db_storage_path()` para calcular una constante | `~/.local/share/<carpeta actual>`, es decir, `/home/app/.local/share/app` |
+| **Al crear cualquier `Crew`** | `latest_kickoff_task_outputs.db`, el SQLite de salidas de tareas para `crewai replay` | En esa misma carpeta |
+| Al usar la memoria | La base de datos LanceDB de la memoria unificada | En esa carpeta + `/memory`, salvo que se le pase `path` |
+
+Resultado: el contenedor ni siquiera arrancaría en cuanto el backend importara
+CrewAI (`PermissionError: '/home/app'`). Hoy está *healthy* solo porque `app/`
+todavía no lo importa.
+
+**Decisión.**
+- **En la imagen:** `HOME=/tmp` y `CREWAI_STORAGE_DIR=/tmp/crewai`.
+  `db_storage_path()` usa `CREWAI_STORAGE_DIR` como nombre dentro de la
+  carpeta de datos, pero una ruta absoluta la sustituye entera (comprobado:
+  devuelve `/tmp/crewai`). `HOME=/tmp` cubre a otras librerías que escriben en
+  la carpeta personal, como las cachés de modelos.
+- **En el Compose:** `read_only: true` y `tmpfs: /tmp:size=512m`. Todo el
+  sistema de ficheros es de solo lectura salvo `/tmp`, que está **en memoria**
+  y se vacía en cada arranque. Lo que escriba CrewAI nunca toca el disco ni
+  sobrevive a un reinicio. Docker monta ese `tmpfs` con `noexec`: desde ahí no
+  se puede ejecutar nada.
+- **En el CI:** un paso del job `docker` importa CrewAI, crea un
+  `TaskOutputStorageHandler` y una memoria LanceDB con ruta propia dentro del
+  contenedor. Se comprobó que falla sin esta corrección ("Read-only file
+  system"). Si una versión nueva de CrewAI escribiera en otro sitio, saltaría
+  aquí y no en la VM.
+
+**Alternativas descartadas.**
+- **Crear `/home/app` en la imagen, escribible por `app`:** funciona, pero lo
+  escrito quedaría en la capa del contenedor y sobreviviría a los reinicios.
+  Para la memoria a corto plazo, eso contradice que sea efímera
+  (`arquitectura-multiagente-crewai.md` §5).
+- **Un volumen para los datos de CrewAI:** sería persistente, justo lo que no
+  se quiere. El estado que importa ya está en PostgreSQL.
+- **Dejar el sistema de ficheros escribible:** cualquier escritura inesperada
+  pasaría desapercibida hasta que causara un problema. Con solo lectura falla
+  enseguida, en local y en el CI.
+
+**Consecuencias.**
+- Probado en local con el Compose: la API está *healthy*, las migraciones
+  funcionan y CrewAI escribe en `/tmp/crewai`. Escribir en `/app`, `/etc` o
+  `/home` falla con "Read-only file system".
+- El `tmpfs` consume RAM de la VM, hasta 512 MB.
+- **Hallazgos sobre CrewAI 1.15.23 que afectan al diseño de §5 de
+  `arquitectura-multiagente-crewai.md`. Se dejan anotados para revisarlos
+  antes de escribir el Flow:**
+  1. `CREWAI_STORAGE_DIR` es una variable de entorno **de todo el proceso**.
+     Con un único proceso que atiende a varios usuarios a la vez (D-011),
+     cambiarla en cada ejecución sería una condición de carrera. Para aislar la
+     memoria de cada ejecución hay que pasar la ruta de forma explícita: el
+     almacenamiento LanceDB acepta `path` (comprobado).
+  2. CrewAI 1.15 ya no tiene memorias `short_term`, `long_term` y `entity`:
+     tiene una memoria unificada (`Memory`, `MemoryScope`) sobre LanceDB, no
+     sobre SQLite. La tabla de §5 describe la API anterior.
+  3. Cada `Crew` escribe sus salidas en el mismo
+     `latest_kickoff_task_outputs.db`, que comparten todas las ejecuciones del
+     proceso. Eso supone riesgo de bloqueos de SQLite con usuarios
+     concurrentes y salidas de varios usuarios en un mismo fichero mientras
+     vive el contenedor (es efímero, pero compartido).

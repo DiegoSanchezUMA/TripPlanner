@@ -180,3 +180,6 @@ secretos viven en el entorno `production`, que permite exigir aprobación manual
   semana, como segunda opinión junto a SonarCloud (D-032).
 - `main` solo cambia por PR con `ci-ok` en verde; no se puede borrar ni
   reescribir su historial (D-033).
+- La API se ejecuta sin root y con el sistema de ficheros de solo lectura. Solo
+  `/tmp` es escribible: está en memoria y se vacía en cada arranque, y ahí
+  escribe CrewAI (D-034, D-035).

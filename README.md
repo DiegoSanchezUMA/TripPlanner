@@ -88,6 +88,9 @@ segundos gracias a la caché ([D-034](docs/decisiones/decisiones.md)).
   desde la red local.
 - La primera vez, un script de inicialización crea las extensiones `vector`
   (pgvector) y `pgcrypto`.
+- El contenedor de la API es de solo lectura: solo `/tmp` (en memoria) es
+  escribible. Si ves un error `Read-only file system`, es intencionado: algo
+  intenta escribir donde no debe ([D-035](docs/decisiones/decisiones.md)).
 
 ### 7. Migraciones
 

@@ -7,10 +7,12 @@
 # Dos etapas sobre la misma imagen de Python, para que el intérprete esté en la
 # misma ruta y el entorno virtual funcione al copiarlo de una a otra:
 #   builder: Python + uv. Instala las dependencias en /app/.venv.
-#   runner:  solo Python, el entorno ya instalado y el código. Sin uv, sin la
-#            caché de uv y sin root.
+#   runner:  solo Python, el entorno ya instalado y el código. Sin el uv del
+#            builder (el .venv trae otro: crewai-cli depende de él), sin la
+#            caché de uv y sin root. Solo /tmp es escribible (D-035).
 
-# uv fijado a la misma versión que en local y en el CI (D-016).
+# Etapa auxiliar: solo aporta el ejecutable de uv a la etapa builder, en la
+# versión exacta de D-016. No entra en la imagen final.
 FROM ghcr.io/astral-sh/uv:0.12.23 AS uv
 
 # ---------------------------------------------------------------- builder ----
@@ -59,9 +61,15 @@ COPY app ./app
 
 # PYTHONDONTWRITEBYTECODE: el código es de solo lectura, que no intente
 # escribir .pyc. PYTHONUNBUFFERED: logs al momento, sin búfer.
+# HOME y CREWAI_STORAGE_DIR en /tmp (D-035): el usuario app no tiene carpeta
+# personal y CrewAI escribe en disco nada más importarse (crea su carpeta de
+# datos) y en cada Crew (SQLite de salidas de tareas). /tmp es el único sitio
+# escribible: efímero y, en el Compose, en memoria (tmpfs).
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    HOME=/tmp \
+    CREWAI_STORAGE_DIR=/tmp/crewai
 
 USER app
 EXPOSE 8000

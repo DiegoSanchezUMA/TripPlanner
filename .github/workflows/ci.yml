@@ -293,6 +293,19 @@ jobs:
           curl -fsS http://127.0.0.1:8000/health
           docker compose --env-file ../env/.env exec -T api alembic upgrade head
 
+      # CrewAI escribe en disco al importarse y en cada Crew. El contenedor es
+      # de solo lectura salvo /tmp (D-035): si una versión nueva escribiera en
+      # otro sitio, fallaría aquí y no al desplegar.
+      - name: CrewAI puede escribir donde debe (contenedor de solo lectura)
+        run: >
+          docker compose --env-file ../env/.env exec -T api python -c
+          "import crewai, tempfile;
+          from crewai.utilities.task_output_storage_handler import TaskOutputStorageHandler;
+          from crewai.memory.storage.lancedb_storage import LanceDBStorage;
+          TaskOutputStorageHandler();
+          LanceDBStorage(path=tempfile.mkdtemp(prefix='crew-'));
+          print('CrewAI', crewai.__version__, 'OK')"
+
       - name: Logs de los contenedores (si algo ha fallado)
         if: failure()
         run: docker compose --env-file ../env/.env logs
