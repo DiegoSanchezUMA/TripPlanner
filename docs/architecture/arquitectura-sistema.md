@@ -134,7 +134,7 @@ ejecutan los jobs afectados (D-001).
 
 | Job | Se ejecuta si cambia | Comprobaciones |
 |---|---|---|
-| `backend` | `backend/`, `ci.yml` | `ruff check`, `ruff format --check`, `pyright`, migraciones Alembic, `pytest` con informe de cobertura (sin umbral: la barrera es el gate de Sonar, D-002). Usa un servicio efímero de Postgres (`pgvector/pgvector:0.8.7-pg16-bookworm`, D-015) con health check. |
+| `backend` | `backend/`, `ci.yml` | `ruff check`, `ruff format --check`, `pyright`, migraciones Alembic, `pytest` con informe de cobertura (sin umbral: la barrera es el gate de Sonar, D-002). Usa un servicio efímero de Postgres (`pgvector/pgvector:0.8.7-pg16-bookworm`, D-015) con health check y sin contraseña. uv instala con `--locked --no-build`: lockfile verificado y solo paquetes precompilados (D-031). |
 | `frontend` | `frontend/`, `shared/`, `ci.yml` | Lint, formato con Prettier (D-029), `next typegen` + `tsc --noEmit` (D-023), tests con cobertura (Vitest, D-019), build de Next.js con Webpack (D-022) y de Storybook. |
 | `contracts` | Modelos, API, `shared/` | Regenera JSON Schema y tipos TS y falla si difieren de lo commiteado. Se omite hasta que exista el generador. |
 | `docker` | `backend/`, `frontend/`, `infra/`, `ci.yml` | Valida el Compose, construye las imágenes en **runner ARM** (como la VM, D-006) y analiza la configuración con Trivy (HIGH/CRITICAL). |

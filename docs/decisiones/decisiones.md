@@ -37,6 +37,7 @@ arquitectura multiagente viven en `docs/arquitectura-multiagente-crewai.md`.
 | D-028 | Hooks de Git con Husky: lint-staged, commitlint y pre-push por partes | Aceptada |
 | D-029 | Prettier como formateador del frontend, en el pre-commit y en el CI | Aceptada |
 | D-030 | Configuración compartida de VS Code: extensiones recomendadas y formato al guardar | Aceptada |
+| D-031 | CI del backend: uv con lockfile verificado y sin compilar, y Postgres de pruebas sin contraseña | Aceptada |
 
 Formato de cada entrada: contexto, decisión, alternativas descartadas y
 consecuencias. Estados: **Aceptada**, **Pendiente** (decidida pero aún sin
@@ -596,8 +597,8 @@ sale una versión nueva de pgvector o de Postgres.
 **Contexto.** `backend/pyproject.toml` declara las dependencias del backend
 con sus rangos de versiones, la versión de Python y la configuración de las
 herramientas (ruff, pyright, pytest). `uv.lock` guarda la versión exacta que se
-instala, con *hashes*. El CI instala con `uv sync --frozen`, así que sin
-`uv.lock` el job falla.
+instala, con *hashes*. El CI instala con `uv sync --frozen` (desde D-031,
+`uv sync --locked --no-build`), así que sin `uv.lock` el job falla.
 
 **Política.**
 - **`pyproject.toml` con rangos y `uv.lock` con versiones exactas**
@@ -1186,9 +1187,11 @@ sea rápido. Además, los mensajes de commit ya seguían Conventional Commits a 
   `frontend/node_modules` (versiones de `pnpm-lock.yaml`).
 
 Por qué cada pieza:
-- **`uv lock --check`:** el CI instala con `uv sync --frozen`, que usa
+- **`uv lock --check`:** el CI instalaba con `uv sync --frozen`, que usa
   `uv.lock` tal cual sin comprobar que coincide con `pyproject.toml`. Un cambio
   de dependencias sin `uv lock` pasaría el CI con las versiones antiguas.
+  Desde D-031 el CI usa `--locked` y también lo detecta. El hook sigue siendo
+  útil porque avisa antes del commit, sin esperar al CI.
 - **Tipos y tests en `pre-push`, no en `pre-commit`:** necesitan el proyecto
   entero y tardan decenas de segundos. Hacerlo en cada commit sería demasiado
   lento, pero los errores de tipos son justo los que `lint-staged` no ve.
@@ -1211,9 +1214,9 @@ Por qué cada pieza:
 - Tras clonar hay que ejecutar `pnpm install` una vez en la raíz. Sin eso no hay
   hooks: Git no los activa solo.
 - Los hooks se pueden saltar (`--no-verify`), así que el CI sigue siendo la
-  barrera de verdad. El CI no comprueba los mensajes de commit. Hay dos mejoras
-  posibles: un job que valide los mensajes del PR, y `uv sync --locked` en lugar
-  de `--frozen` para que el CI también detecte un `uv.lock` desfasado.
+  barrera de verdad. El CI no comprueba los mensajes de commit. Había dos
+  mejoras posibles. La de `uv sync --locked` en lugar de `--frozen` se aplicó
+  en D-031. La otra, un job que valide los mensajes del PR, sigue pendiente.
 - En Windows, los hooks se ejecutan con el `sh` de Git for Windows y necesitan
   `uv` y `pnpm` en el PATH. Si el editor no los encuentra, hay que reiniciarlo
   después de instalarlos. `.gitattributes` ya fuerza LF, así que los hooks no se
@@ -1357,3 +1360,61 @@ configuración.
   sin esa conexión verá un aviso de la extensión, y no afecta a nada más.
 - El intérprete (`backend/.venv`) se elige a mano (README), porque su ruta
   cambia entre Windows (`Scripts/`) y Linux o macOS (`bin/`).
+
+---
+
+## D-031 · CI del backend: uv con lockfile verificado y sin compilar, y Postgres de pruebas sin contraseña
+
+- **Fecha:** 2026-10-05
+- **Estado:** Aceptada
+
+**Contexto.** Con SonarQube for IDE en modo conectado (D-030), el editor
+mostraba 18 avisos de seguridad en `ci.yml`, de reglas del analizador de
+GitHub Actions de SonarCloud:
+
+| Regla | Qué dice | Dónde saltaba |
+|---|---|---|
+| `githubactions:S8544` (vulnerabilidad, mayor) | Las dependencias de Python deben estar bloqueadas a versiones verificadas | En cada `uv run`: si el lock no coincide, puede volver a resolver |
+| `githubactions:S8541` (vulnerabilidad, mayor) | No ejecutar scripts de paquetes al instalar | En `uv sync` y `uv run` sin `--no-build`: un paquete sin *wheel* se compila desde el código fuente, y eso ejecuta su código |
+| `secrets:S6698` (bloqueante) y `yaml:S2068` | Contraseña de PostgreSQL escrita en el código | En la del servicio de Postgres del job `backend`, en `DATABASE_URL` y en `PGPASSWORD` |
+
+SonarCloud no los veía porque `ci.yml` no está en `sonar.sources`: solo el
+editor. Además, quedaba pendiente una mejora de D-028: con `--frozen`, un
+`uv.lock` desfasado pasaba el CI sin avisar.
+
+**Decisión.**
+- **`uv sync --locked --no-build` y `uv run --locked --no-build`** en los jobs
+  `backend` y `contracts`, y lo mismo en los workflows aplazados (`llm-evals`,
+  y `uvx --no-build` en `load-test`).
+  - **`--locked` en lugar de `--frozen`:** además de instalar exactamente
+    `uv.lock`, falla si no coincide con `pyproject.toml`. La documentación de
+    la regla pone `--frozen` como ejemplo, pero el analizador también acepta
+    `--locked`, que es más estricto.
+  - **`--no-build`:** solo se instalan paquetes precompilados (*wheels*). Antes
+    de aplicarlo se comprobó que los 192 paquetes del lock tienen *wheel* para
+    Linux x86_64 y Python 3.13. La única excepción es `pywin32`, que solo se
+    instala en Windows. Una resolución simulada para Linux con `--no-build`
+    terminó sin errores. El proyecto propio (`tripplanner-backend`) es
+    *virtual* y no se construye.
+- **Postgres del job `backend` sin contraseña** (`POSTGRES_HOST_AUTH_METHOD:
+  trust`): `DATABASE_URL` y `psql` van sin credenciales. La base de datos es
+  efímera, se crea y se destruye con el job y solo es accesible desde el
+  runner.
+
+**Alternativas descartadas.**
+- **Marcar los avisos de contraseña como falsos positivos:** esa contraseña no
+  protegía nada, pero seguiría escrita en el código. Quitarla es más limpio que
+  justificarla.
+- **Sacar la contraseña de un secreto de GitHub:** sería un secreto que no
+  protege nada, y los secretos no llegan a los PRs que vienen de forks.
+- **`--frozen`, como en el ejemplo de la regla:** también cumple, pero no
+  detecta un lockfile desfasado.
+
+**Consecuencias.**
+- Tras el cambio, SonarQube for IDE muestra 0 avisos en `ci.yml`.
+- Si en el futuro una dependencia no publica *wheel* para Linux, el CI fallará
+  en "Instalar dependencias". Habrá que decidir de forma explícita si se
+  permite compilar ese paquete y anotarlo aquí.
+- Los hooks locales siguen con `uv run --frozen`: Sonar no analiza
+  `lint-staged.config.mjs`, y en local es `uv lock --check` quien comprueba
+  que el lockfile está al día (D-028).
