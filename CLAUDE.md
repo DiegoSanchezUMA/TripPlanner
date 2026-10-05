@@ -10,9 +10,12 @@ Francisco López Valverde.
 ## Stack
 - Frontend: React, Next.js, TypeScript, CopilotKit (CopilotRuntime como proxy)
 - Estilos/UI: componentes modulares documentados en Storybook
-- Backend: FastAPI (BFF) + CrewAI, Python 3.12, uv
+- Backend: FastAPI (BFF) + CrewAI, Python 3.13, uv (versiones fijadas y sus
+  motivos en `docs/decisiones/decisiones.md`, D-014 a D-019)
 - Base de datos: PostgreSQL 16 + pgvector (relacional y vectorial en el mismo motor)
-- Caché/cola: Redis
+- Sin Redis: caché MCP en memoria del backend (un solo proceso), cuotas en
+  PostgreSQL; Redis queda como evolución futura (ver
+  `docs/decisiones/decisiones.md`, D-012)
 - Observabilidad: Langfuse
 - LLMs: Groq, Google Gemini, Azure OpenAI (capas gratuitas)
 - Despliegue: frontend en Vercel; backend en una VM Oracle Cloud Always Free
@@ -20,12 +23,14 @@ Francisco López Valverde.
   sola VM, volumen de usuarios bajo)
 
 ## Arquitectura multiagente (cerrada — ver `docs/arquitectura-multiagente-crewai.md`)
-7 agentes, un especialista por servidor MCP (Flight, Hotel, Places & Routes,
-Weather) más Travel Planner, Itinerary Composer e Itinerary Reviewer. Orquestación
+8 agentes, un especialista por servidor MCP (Flight, Hotel, Places, Routes,
+Weather) más Travel Planner, Itinerary Composer e Itinerary Reviewer. Places usa
+Geoapify MCP y Routes usa Transitous MCP (datos abiertos), no Google Maps, por los
+términos de Google en el EEE (D-020, pendiente de desarrollar). Orquestación
 con un CrewAI Flow (`@router classify_intent`, modelo de agencia por adhesión: la
 mayoría de mensajes se resuelven sin instanciar ninguna crew) por encima de dos
 crews: PlanningCrew (`Process.sequential`, async en T2–T4, 8 tareas) y
-RefinementCrew (4 tareas, 3 agentes, sin Travel Planner). Guardrails deterministas
+RefinementCrew (4–5 tareas, 3–4 agentes, sin Travel Planner). Guardrails deterministas
 (anclaje, horario, presupuesto, dieta, accesibilidad, ritmo…) + probabilísticos
 (rúbrica LLM-as-a-judge, 5 dimensiones). Contratos de datos: **Pydantic siempre**,
 sin agente formateador. Memoria: pgvector solo con hechos del usuario (nunca datos
@@ -50,18 +55,25 @@ aísla por usuario — ver documento de arquitectura §5 antes de tocar esto).
     44 hipótesis sobre el LLM, escenarios de validación V01–V12
   - `estado-del-arte.md` — contexto y justificación de las decisiones (por qué
     CrewAI, por qué MCP, por qué pgvector, panorama competitivo)
+  - `architecture/arquitectura-sistema.md` — arquitectura del sistema fuera del
+    multiagente: componentes, despliegue, entornos, CI/CD (workflows y jobs),
+    seguridad
+  - `decisiones/decisiones.md` — registro de decisiones de infraestructura,
+    CI/CD y herramientas (D-NNN: contexto, decisión, alternativas,
+    consecuencias). Al tomar una decisión de este tipo, añadir aquí su entrada
+    y actualizar `arquitectura-sistema.md` si cambia el sistema
   - `uml/` — diagramas fuente (Visual Paradigm, exportados a `.jpg`): casos de
     uso, secuencia, componentes, despliegue, clases, requisitos
-  - `agents/`, `api/`, `architecture/`, `decisiones/`, `mcp/`, `rag/` — carpetas
-    reservadas para documentación futura más granular; de momento el contenido
-    vive consolidado en `arquitectura-multiagente-crewai.md`
+  - `agents/`, `api/`, `mcp/`, `rag/` — carpetas reservadas para documentación
+    futura más granular; de momento ese contenido vive consolidado en
+    `arquitectura-multiagente-crewai.md`
 
 ## Reglas de trabajo
 - Los schemas Pydantic de `backend/app/agents/models/` (contratos de datos, ver
   `docs/arquitectura-multiagente-crewai.md` §8) son la fuente de verdad del
   contrato de datos. Frontend y backend nunca deben divergir de ahí; los tipos
   TypeScript se generan desde el esquema, no se mantienen a mano.
-- Un agente por servidor MCP: no fusionar responsabilidades. Exactamente 7 agentes.
+- Un agente por servidor MCP: no fusionar responsabilidades. Exactamente 8 agentes.
 - No introducir Kubernetes ni `Process.hierarchical` — decisiones cerradas y
   justificadas en `docs/arquitectura-multiagente-crewai.md` §2 y §14.
 - No usar agente formateador (solo salidas Pydantic vía `output_pydantic`).
@@ -82,5 +94,5 @@ aísla por usuario — ver documento de arquitectura §5 antes de tocar esto).
 ## Comandos
 - `docker compose up -d --build` — levantar entorno local
 - `docker compose ps` / `docker stats --no-stream` — estado y consumo
-- `make test` — tests backend (pytest) y frontend (Jest/RTL)
+- `make test` — tests backend (pytest) y frontend (Vitest + Testing Library)
 - `uv run ruff check` — lint backend

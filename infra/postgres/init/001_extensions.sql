@@ -3,7 +3,7 @@
 -- /docker-entrypoint-initdb.d se ejecuta en orden alfabético al inicializar).
 
 -- pgvector: necesaria para hard_facts.embedding y soft_facts.embedding
--- (ver docs/data-model/modelo-datos.md). La imagen pgvector/pgvector:pg16 ya trae
+-- (ver docs/data-model/modelo-datos.md). La imagen pgvector/pgvector:0.8.7-pg16-bookworm ya trae
 -- el binario compilado; aquí solo se activa para esta base de datos concreta.
 CREATE EXTENSION IF NOT EXISTS vector;
 

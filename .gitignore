@@ -12,14 +12,22 @@ venv/
 .pytest_cache/
 .ruff_cache/
 *.egg-info/
+# Informes de cobertura y tests (pytest-cov / junit)
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+junit.xml
 
 # Node / frontend
 node_modules/
 .next/
 dist/
 build/
-.storybook-static/
+storybook-static/
 coverage/
+# Lo regenera Next (next typegen / next build)
+next-env.d.ts
 
 # Docker / datos locales
 infra/postgres/data/

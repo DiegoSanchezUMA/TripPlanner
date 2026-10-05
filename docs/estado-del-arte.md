@@ -45,15 +45,16 @@ duración (Oracle Cloud) en vez de funciones serverless para el backend.
 Estandariza la conexión modelo↔herramientas externas mediante un modelo
 cliente-servidor sobre JSON-RPC 2.0 (propuesto por Anthropic, 2024). Dos
 transportes: `stdio` (servidor como proceso hijo) y HTTP+SSE/Streamable HTTP
-(servidor remoto). El prototipo usa ambos: `stdio` para MCP locales (p. ej. Google
-Maps) y HTTP+SSE para MCP alojados aparte (p. ej. vuelos tipo OctoTrip) — esto
-último encaja con el patrón BFF+CopilotKit del frontend, que ya usa SSE.
+(servidor remoto). El prototipo usa Streamable HTTP para sus servidores, tanto
+alojados por el proveedor (p. ej. Geoapify para lugares) como en contenedores
+propios (p. ej. Transitous para rutas); `stdio` queda para pruebas locales. Encaja
+con el patrón BFF+CopilotKit del frontend, que ya usa SSE.
 **Desacoplamiento**: cuando un proveedor externo cambia, la modificación queda
 contenida en su servidor MCP, sin tocar el flujo de agentes.
 
 Riesgo documentado a escala: con muchos servidores MCP, cargar todas las
 definiciones de herramientas satura el contexto (línea de trabajo **ScaleMCP**,
-enrutamiento dinámico por embeddings) — no aplica en el prototipo (solo 4
+enrutamiento dinámico por embeddings) — no aplica en el prototipo (solo 5
 servidores), queda como trabajo futuro.
 
 Protocolos entre agentes (no modelo↔herramienta sino agente↔agente) como **ACP**,

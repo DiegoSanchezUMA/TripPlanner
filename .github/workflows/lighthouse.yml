@@ -1,0 +1,54 @@
+# Accesibilidad y rendimiento web (WCAG AA, RNF de interfaz) con Lighthouse CI.
+name: Lighthouse
+
+on:
+  pull_request:
+    paths:
+      - 'frontend/**'
+      - '.github/workflows/lighthouse.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: lighthouse-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lighthouse:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    env:
+      NEXT_TELEMETRY_DISABLED: 1
+      BACKEND_URL: http://localhost:8000
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          package_json_file: frontend/package.json
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24   # la misma que Vercel (D-018)
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+
+      - name: Arrancar Next.js en modo producción
+        run: |
+          pnpm start &
+          npx --yes wait-on http://localhost:3000 --timeout 60000
+
+      - name: Lighthouse CI
+        uses: treosh/lighthouse-ci-action@3e7e23fb74242897f95c0ba9cabad3d0227b9b18 # v12
+        with:
+          configPath: ./frontend/lighthouserc.json
+          urls: |
+            http://localhost:3000/
+          runs: 3                 # mediana de 3 ejecuciones, menos ruido
+          uploadArtifacts: true   # informes HTML descargables
+          temporaryPublicStorage: true

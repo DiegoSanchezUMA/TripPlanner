@@ -89,7 +89,9 @@ Diagramas: `docs/uml/casos-de-uso/Interacción Dinámica y UI Generativa Use Cas
 
 Diagramas: `docs/uml/casos-de-uso/Motor de IA y Herramientas (Integración MCP) Use Case Diagram.jpg`.
 Actores externos: Flight MCP (`@mcp/octotrip`), Hotel MCP (`@mcp/winwin-travel`),
-Google Maps Platform MCP, Weather MCP (`@mcp_weather_server`).
+Places MCP (Geoapify), Routes MCP (Transitous), Weather MCP (`@mcp_weather_server`).
+Places y Routes sustituyen al Google Maps Platform MCP que aparece en el diagrama
+(D-020, pendiente de actualizar el diagrama).
 
 | ID | Título | Descripción |
 |---|---|---|
@@ -99,7 +101,7 @@ Google Maps Platform MCP, Weather MCP (`@mcp_weather_server`).
 | RF-04.04 | Búsqueda de alojamiento | Disponibilidad real para fechas y ocupantes exactos |
 | RF-04.05 | Filtrado de alojamiento | Cruce con hard facts (mascotas, accesibilidad, desayuno) |
 | RF-04.06 | Extracción de información de alojamiento | Fotos, estrellas, valoraciones |
-| RF-04.07 | Búsqueda de actividades | Categórica o lenguaje natural sobre Google Maps |
+| RF-04.07 | Búsqueda de actividades | Categórica o lenguaje natural sobre OpenStreetMap (Places MCP) |
 | RF-04.08 | Extracción de información de actividades | Horarios de apertura/cierre |
 | RF-04.09 | Extracción de coordenadas | Lat/lon exactas para el mapa |
 | RF-04.10 | Cálculo de tiempos de desplazamiento | Tiempo real entre POIs consecutivos |
@@ -209,8 +211,8 @@ módulo 2, los **Servidores MCP** aparecen como actor "sistema externo".
 | 5. Memoria/RAG | CU-05.01 Extraer preferencias del viaje · CU-05.02 Consolidar conocimiento a largo plazo (proceso por lotes) · CU-05.03 Recuperar contexto mediante RAG |
 
 **Nota de implementación**: el diagrama de casos de uso del módulo 4 sugiere un
-agente por servidor MCP — es exactamente lo que implementa el diseño final (4
-especialistas), no los "2 agentes agrupados" que describía una versión anterior de
+agente por servidor MCP — es exactamente lo que implementa el diseño final (5
+especialistas desde D-020), no los "2 agentes agrupados" que describía una versión anterior de
 la memoria (ver `docs/arquitectura-multiagente-crewai.md` §15).
 
 ## Referencias
