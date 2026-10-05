@@ -1246,7 +1246,11 @@ frontend casi vacío.
   (D-023), en `frontend/prettier.config.mjs`.
 - **`eslint-config-prettier`** (versión plana) al final de la configuración de
   ESLint: apaga las reglas de estilo que chocarían con Prettier. ESLint se ocupa
-  de la calidad del código y Prettier, del formato.
+  de la calidad del código y Prettier, del formato. Hoy no apaga ninguna regla
+  activa, porque `eslint-config-next` no trae reglas de formato (comprobado con
+  la CLI de `eslint-config-prettier`). Está como protección por si en el futuro
+  se añade un preset que sí las tenga. Va la última porque, en la configuración
+  plana, si dos bloques configuran la misma regla gana el último.
 - **`frontend/.prettierignore`:** lo generado (`.next/`, `coverage/`,
   `storybook-static/`, `next-env.d.ts`), el lockfile y las skills de Claude Code,
   que son de terceros (`.claude/`, `skills-lock.json`).
@@ -1267,6 +1271,15 @@ frontend casi vacío.
   usarlo como formateador, y Prettier es el estándar en Next.js y React.
 - **Biome:** formatea y hace lint más rápido, pero no cubre todas las reglas de
   `eslint-config-next`. Habría dos herramientas solapadas igualmente.
+- **`eslint-plugin-prettier`** (Prettier dentro de ESLint, como la regla
+  `prettier/prettier`): la documentación de Prettier lo desaconseja en general.
+  Llena el editor de subrayados rojos por cosas de formato, es más lento que
+  ejecutar Prettier directamente y añade una capa más que puede fallar. Su
+  configuración recomendada tiene que desactivar además reglas que no son de
+  formato (`arrow-body-style` y `prefer-arrow-callback`). Aquí, encima,
+  duplicaría trabajo: Prettier ya se ejecuta en el `pre-commit` y en el CI
+  (`format:check`), y los errores de formato se mezclarían con los problemas
+  reales del lint.
 
 **Consecuencias.**
 - El primer formateo solo cambió `tsconfig.json`: los arrays pasan a una línea.
