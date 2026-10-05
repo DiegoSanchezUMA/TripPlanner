@@ -126,6 +126,7 @@ runners están fijados a `ubuntu-24.04` (y `ubuntu-24.04-arm`), no a
 | `llm-evals.yml` | Solo manual | Evaluación de hipótesis contra datasets de Langfuse (D-008). Aún no está en el repo. |
 | `load-test.yml` | Solo manual | Pruebas de carga con Locust (D-008). Aún no está en el repo. |
 | `dependabot.yml` | Mensual | Actualiza las versiones de las Actions: SHA y comentario (D-007, D-026). |
+| CodeQL (*default setup*, configurado en GitHub, sin fichero) | PR, push a `main` y semanal | Análisis de seguridad de Python, JS/TS y los workflows (D-032). |
 
 ### 4.1 CI (`ci.yml`)
 
@@ -139,7 +140,7 @@ ejecutan los jobs afectados (D-001).
 | `contracts` | Modelos, API, `shared/` | Regenera JSON Schema y tipos TS y falla si difieren de lo commiteado. Se omite hasta que exista el generador. |
 | `docker` | `backend/`, `frontend/`, `infra/`, `ci.yml` | Valida el Compose, construye las imágenes en **runner ARM** (como la VM, D-006) y analiza la configuración con Trivy (HIGH/CRITICAL). |
 | `sonar` | Si `backend` o `frontend` pasan | SonarQube Cloud con el quality gate *Sonar way* (código nuevo: cobertura ≥ 80 %, duplicación ≤ 3 %, notas A, hotspots revisados). Si no se supera, el job falla (D-002). En `main`, el código nuevo es el de los últimos 30 días (D-013). |
-| `ci-ok` | Siempre | Un único check que resume el resultado; es el que se marca como obligatorio en `main`. |
+| `ci-ok` | Siempre | Un único check que resume el resultado; es el único obligatorio para hacer merge en `main` (D-033). |
 
 ### 4.2 CD del backend (`deploy-backend.yml`)
 
@@ -172,3 +173,9 @@ secretos viven en el entorno `production`, que permite exigir aprobación manual
 - Trivy analiza Dockerfiles y Compose en cada cambio de infraestructura.
 - Actions fijadas por SHA de commit, que no se puede reescribir como una
   etiqueta (D-026).
+- Dependencias de Python instaladas en el CI solo desde el lockfile verificado
+  y sin compilar paquetes; la base de datos de pruebas, sin contraseña (D-031).
+- CodeQL analiza la seguridad del código y de los workflows en cada PR y cada
+  semana, como segunda opinión junto a SonarCloud (D-032).
+- `main` solo cambia por PR con `ci-ok` en verde; no se puede borrar ni
+  reescribir su historial (D-033).
