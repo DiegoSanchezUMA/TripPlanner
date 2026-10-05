@@ -1,7 +1,7 @@
-# Compose base de desarrollo local. Arranca solo la capa de datos (Postgres+pgvector;
-# sin Redis, ver D-012) — el backend se añade en un paso posterior una vez tenga código real.
+# Compose base de desarrollo local: Postgres+pgvector (sin Redis, ver D-012) y la
+# API del backend (D-034).
 # Uso: desde infra/docker/
-#   docker compose --env-file ../env/.env up -d
+#   docker compose --env-file ../env/.env up -d --build
 #
 # Producción (VM Oracle Cloud) usará un docker-compose.prod.yml aparte que añade
 # Caddy como reverse proxy con HTTPS automático y no publica los puertos de
@@ -33,6 +33,27 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+    networks: [internal]
+
+  api:
+    # Backend FastAPI + CrewAI (D-011, D-034). El contexto es backend/ y el
+    # Dockerfile vive en infra/ (la ruta de "dockerfile" es relativa al contexto).
+    build:
+      context: ../../backend
+      dockerfile: ../infra/docker/backend/Dockerfile
+    image: tripplanner-api:local
+    container_name: tripplanner-api
+    restart: unless-stopped
+    # Solo las variables que usa el backend, no el .env entero. Dentro de la
+    # red de Compose, DATABASE_URL apunta al host "postgres" (el servicio).
+    environment:
+      APP_ENV: local
+      DATABASE_URL: ${DATABASE_URL:?Define DATABASE_URL en infra/env/.env}
+    ports:
+      - "127.0.0.1:${API_PORT:-8000}:8000"   # solo localhost, como Postgres (D-004)
+    depends_on:
+      postgres:
+        condition: service_healthy
     networks: [internal]
 
 volumes:

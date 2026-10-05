@@ -40,6 +40,7 @@ arquitectura multiagente viven en `docs/arquitectura-multiagente-crewai.md`.
 | D-031 | CI del backend: uv con lockfile verificado y sin compilar, y Postgres de pruebas sin contraseña | Aceptada |
 | D-032 | CodeQL (*default setup*) como capa adicional de análisis de seguridad | Aceptada |
 | D-033 | `main` protegida con un ruleset: PR obligatorio y `ci-ok` como único check requerido | Aceptada |
+| D-034 | Imagen del backend: Dockerfile multietapa (builder/runner) con caché de capas, y servicio `api` en el Compose | Aceptada |
 
 Formato de cada entrada: contexto, decisión, alternativas descartadas y
 consecuencias. Estados: **Aceptada**, **Pendiente** (decidida pero aún sin
@@ -1533,3 +1534,96 @@ algún job ha fallado o se ha cancelado.
 - Si en el futuro se añade un workflow cuyo resultado deba bloquear el merge,
   su job tiene que entrar en el `needs` de `ci-ok`; no hace falta tocar el
   ruleset.
+
+---
+
+## D-034 · Imagen del backend: Dockerfile multietapa (builder/runner) con caché de capas, y servicio `api` en el Compose
+
+- **Fecha:** 2026-10-05
+- **Estado:** Aceptada
+
+**Contexto.** El CD (D-005) necesita una imagen del backend, pero el programa
+todavía es un esqueleto. Se decidió hacer ya solo la imagen y el servicio `api`
+del Compose, siguiendo la idea del *walking skeleton*. El Dockerfile depende de
+cómo se instala y se arranca el backend (`uv.lock` y `uvicorn app.main:app`), y
+eso ya está decidido. El resto del CD (Compose de producción, Caddy, la VM y los
+secretos) espera a que haya algo que desplegar. Requisitos: separar las etapas
+de construcción y de ejecución con la imagen más adecuada para cada una, y
+aprovechar la caché tanto en local como en el CI.
+
+**Decisión.**
+- **Dockerfile en `infra/docker/backend/Dockerfile`**, con `backend/` como
+  contexto. Es la carpeta reservada para él y queda dentro de lo que analiza
+  Trivy.
+- **Tres etapas:**
+
+| Etapa | Imagen | Qué hace | Por qué esa imagen |
+|---|---|---|---|
+| `uv` | `ghcr.io/astral-sh/uv:0.12.23` | Solo aporta el binario de uv | La versión exacta de D-016, sin instalarla con pip ni con curl |
+| `builder` | `python:3.13.16-slim-trixie` + uv | `uv sync --locked --no-build --no-dev --no-install-project` en `/app/.venv` | La versión *slim* basta: con `--no-build` no se compila nada, así que no hacen falta gcc ni cabeceras. Si algún día hiciera falta compilar, solo cambiaría esta etapa |
+| `runner` | `python:3.13.16-slim-trixie` | `.venv`, `app/` y `alembic.ini`; usuario `app` (UID 10001); *healthcheck*; `uvicorn` | Es la misma imagen que la del `builder`, así que el intérprete está en la misma ruta y el entorno copiado funciona. Es mínima: sin la caché de uv, sin herramientas de desarrollo y sin compiladores |
+
+- **Python 3.13.16**, la misma versión que usa el CI, sobre Debian 13
+  (*trixie*), la versión estable actual.
+- **Trucos de caché:**
+
+| Truco | Efecto |
+|---|---|
+| Capas ordenadas de menos a más cambiantes: dependencias primero, código al final | Un cambio de código solo rehace la última capa. Comprobado: 7 s frente a 196 s en frío |
+| *Bind mounts* de `uv.lock` y `pyproject.toml` | Se leen, pero no se copian a la imagen |
+| *Cache mount* de la caché de uv | Sobrevive entre builds de la misma máquina: un cambio en el lock solo descarga lo nuevo. Además, la caché no acaba dentro de la imagen |
+| `Dockerfile.dockerignore` como lista blanca | Solo entran `app/`, `alembic.ini`, `pyproject.toml` y `uv.lock`. Los tests, `.venv` o los informes no invalidan la caché ni engordan el contexto |
+| `UV_COMPILE_BYTECODE=1` | Los `.pyc` se generan al construir, así que el contenedor arranca antes |
+| En el CI, BuildKit con la caché de GitHub Actions (`type=gha`, `mode=max`) | Las capas, también las del `builder`, se reutilizan entre ejecuciones del CI |
+
+- **La máquina adecuada para construir:** en el CI, la imagen se construye en el
+  runner `ubuntu-24.04-arm`, que es ARM64 nativo como la VM (D-006). Así no hay
+  que emular otra arquitectura con QEMU, que es mucho más lento. En local se
+  construye para la arquitectura del equipo.
+- **Seguridad:** usuario sin privilegios; el código y el entorno son de root y
+  de solo lectura para `app`; `--locked --no-build` (D-031). Trivy no encuentra
+  nada en el Dockerfile, de ninguna severidad.
+- **Servicio `api` en `docker-compose.yml`:** se construye con este
+  Dockerfile, se publica solo en `127.0.0.1:${API_PORT:-8000}` (D-004), recibe
+  solo `APP_ENV` y `DATABASE_URL`, y espera a que Postgres esté *healthy*.
+  `.env.example` incluye `API_PORT`.
+- **Job `docker` del CI:**
+  1. Construye la imagen con caché.
+  2. Arranca la API y Postgres con `up --wait`, que espera a que pase el
+     *healthcheck*.
+  3. Comprueba `/health` y ejecuta `alembic upgrade head` dentro del
+     contenedor, el mismo paso que hará el despliegue.
+
+**Alternativas descartadas.**
+- **Una sola etapa:** la imagen llevaría uv y, si no se monta como caché, la
+  caché de descargas.
+- **La imagen de uv que ya trae Python** (`uv:python3.13-trixie-slim`) como
+  `builder`: su versión de Python no está fijada, así que el `runner` podría
+  acabar con otra distinta. Copiar solo el binario de uv sobre la misma imagen
+  de Python lo garantiza.
+- **Alpine:** usa musl en lugar de glibc. Muchas *wheels* (`manylinux`) no
+  sirven y habría que compilar, lo que es incompatible con `--no-build`.
+- **Distroless:** usa el Python empaquetado por Debian, en otra ruta y con otra
+  versión que la imagen oficial, así que el entorno del `builder` no sería
+  portable. Además, no tiene shell para depurar.
+- **`backend/Dockerfile`:** es lo más habitual, pero quedaría fuera del
+  análisis de Trivy (`scan-ref: infra`).
+- **`docker compose build` en el CI:** no guarda la caché en GitHub Actions sin
+  pasos extra, mientras que `build-push-action` lo hace directamente. El coste es
+  que el contexto y la ruta del Dockerfile se repiten en `ci.yml` y en el
+  Compose.
+
+**Consecuencias.**
+- **Tamaño de la imagen: 1,32 GB.** Python ocupa unos 36 MB y `.venv`, 1,3 GB.
+  Lo más pesado es litellm, pyarrow, lancedb, kubernetes, onnxruntime y
+  pymupdf, que llegan con CrewAI y crewai-tools (D-016). Reducirlo exige revisar
+  dependencias, no el Dockerfile. Se deja como mejora posible.
+- En `.venv/bin` hay un `uv`. No es el de la etapa `builder`: lo trae
+  `crewai-cli` como dependencia de CrewAI.
+- La caché de GitHub Actions tiene un límite de 10 GB por repositorio y borra lo
+  menos usado. Con `mode=max`, las capas de dependencias se guardan dos veces,
+  una del `builder` y otra del `runner`.
+- Al cambiar la versión de Python o de uv, hay que actualizar también las
+  etiquetas del Dockerfile.
+- Sigue pendiente para el CD (D-005): `docker-compose.prod.yml`, Caddy, la VM y
+  los secretos.

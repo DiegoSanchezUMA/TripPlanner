@@ -94,7 +94,8 @@ aísla por usuario — ver documento de arquitectura §5 antes de tocar esto).
 ## Comandos
 Instalación completa y resto de comandos: `README.md`.
 - `pnpm install` (en la raíz) — instala Husky y activa los hooks de Git (D-028)
-- `docker compose --env-file ../env/.env up -d` (desde `infra/docker/`) — Postgres local
+- `docker compose --env-file ../env/.env up -d --build --wait` (desde `infra/docker/`) —
+  Postgres + API local (imagen multietapa en `infra/docker/backend/Dockerfile`, D-034)
 - `docker compose ps` / `docker stats --no-stream` — estado y consumo
 - Backend (desde `backend/`): `uv sync`, `uv run pytest --ignore=tests/load`,
   `uv run ruff check .`, `uv run pyright`, `uv run uvicorn app.main:app --reload`

@@ -71,24 +71,39 @@ Copy-Item infra/env/.env.example infra/env/.env          # PowerShell
 `infra/env/.env` está en `.gitignore`: nunca se sube al repositorio. Para
 arrancar el esqueleto no hacen falta las claves de LLM ni de MCP.
 
-### 6. Base de datos
+### 6. Base de datos y API (Docker)
 
 ```sh
 cd infra/docker
-docker compose --env-file ../env/.env up -d
-docker compose ps          # espera a que postgres aparezca como "healthy"
+docker compose --env-file ../env/.env up -d --build --wait
 ```
 
-Postgres solo se publica en `127.0.0.1:5432`, no en la red local. La primera vez,
-un script de inicialización crea las extensiones `vector` (pgvector) y
-`pgcrypto`.
+Construye la imagen del backend y arranca Postgres y la API. `--wait` espera a
+que los dos estén *healthy*. La primera vez el build tarda unos minutos porque
+descarga las dependencias; los siguientes, si solo cambia el código, tardan
+segundos gracias a la caché ([D-034](docs/decisiones/decisiones.md)).
+
+- Postgres se publica solo en `127.0.0.1:5432` y la API en
+  `127.0.0.1:8000` (prueba http://127.0.0.1:8000/health). Ninguno es accesible
+  desde la red local.
+- La primera vez, un script de inicialización crea las extensiones `vector`
+  (pgvector) y `pgcrypto`.
 
 ### 7. Migraciones
 
-El backend lee la configuración **de las variables de entorno**, no del fichero
-`.env`. Además, como se ejecuta en tu máquina y no dentro de Docker, el host de
-la base de datos es `localhost`, no `postgres` (ese nombre solo existe dentro de
-la red de Docker Compose).
+La forma más sencilla es ejecutarlas dentro del contenedor de la API, que ya
+tiene la configuración correcta:
+
+```sh
+# desde infra/docker/
+docker compose --env-file ../env/.env exec api alembic upgrade head
+```
+
+Si prefieres ejecutarlas desde tu máquina, ten en cuenta dos cosas:
+- El backend lee la configuración **de las variables de entorno**, no del
+  fichero `.env`.
+- Fuera de Docker, el host de la base de datos es `localhost`, no `postgres`.
+  Ese nombre solo existe dentro de la red de Docker Compose.
 
 ```sh
 # Git Bash, macOS, Linux (desde backend/)
@@ -111,7 +126,7 @@ funciona. La variable dura lo que dure la terminal.
 
 | Comando | Qué hace |
 |---|---|
-| `uv run uvicorn app.main:app --reload` | API en http://127.0.0.1:8000 (prueba con `/health`; documentación interactiva en `/docs`) |
+| `uv run uvicorn app.main:app --reload` | API en http://127.0.0.1:8000, con recarga al guardar (prueba con `/health`; documentación interactiva en `/docs`). Si la API del Compose está arrancada, ya ocupa el 8000: añade `--port 8001` o párala con `docker compose stop api` |
 | `uv run pytest --ignore=tests/load` | Tests unitarios |
 | `uv run ruff check .` y `uv run ruff format .` | Lint y formato |
 | `uv run pyright` | Comprobación de tipos |
@@ -127,13 +142,15 @@ funciona. La variable dura lo que dure la terminal.
 | `pnpm build` | Build de producción |
 | `pnpm storybook` | Catálogo de componentes en http://localhost:6006 |
 
-**Base de datos** (desde `infra/docker/`):
+**Docker: base de datos y API** (desde `infra/docker/`):
 
 | Comando | Qué hace |
 |---|---|
-| `docker compose --env-file ../env/.env up -d` | Arranca Postgres |
-| `docker compose --env-file ../env/.env down` | La para; los datos se conservan en el volumen |
-| `docker compose --env-file ../env/.env down -v` | La para y **borra los datos** |
+| `docker compose --env-file ../env/.env up -d --build --wait` | Reconstruye la imagen de la API (con caché) y arranca Postgres y la API |
+| `docker compose --env-file ../env/.env logs -f api` | Logs de la API en directo |
+| `docker compose --env-file ../env/.env exec api alembic upgrade head` | Aplica las migraciones |
+| `docker compose --env-file ../env/.env down` | Para todo; los datos se conservan en el volumen |
+| `docker compose --env-file ../env/.env down -v` | Para todo y **borra los datos** |
 
 ## Hooks de Git
 
