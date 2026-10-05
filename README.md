@@ -123,6 +123,7 @@ funciona. La variable dura lo que dure la terminal.
 | `pnpm dev` | Aplicación en http://localhost:3000 |
 | `pnpm test` / `pnpm test:coverage` | Tests (Vitest), en modo vigilancia o con cobertura |
 | `pnpm lint` y `pnpm typecheck` | ESLint y comprobación de tipos |
+| `pnpm format` / `pnpm format:check` | Formatea con Prettier / solo comprueba el formato (lo que hace el CI) |
 | `pnpm build` | Build de producción |
 | `pnpm storybook` | Catálogo de componentes en http://localhost:6006 |
 
@@ -141,7 +142,7 @@ frontend ([D-028](docs/decisiones/decisiones.md)).
 
 | Hook | Cuándo | Backend | Frontend |
 |---|---|---|---|
-| `pre-commit` | `git commit`, solo sobre los ficheros preparados | `ruff check --fix` y `ruff format`; `uv lock --check` si cambian las dependencias | `eslint --fix` |
+| `pre-commit` | `git commit`, solo sobre los ficheros preparados | `ruff check --fix` y `ruff format`; `uv lock --check` si cambian las dependencias | `eslint --fix` y `prettier --write` |
 | `commit-msg` | `git commit` | Formato del mensaje (abajo) | Igual |
 | `pre-push` | `git push`, solo la parte que cambia | `pyright` y `pytest` | `next typegen` + `tsc` y Vitest |
 
@@ -209,8 +210,8 @@ docs/       Diseño, requisitos, decisiones y diagramas
 
 ## Integración continua
 
-Cada PR ejecuta [`ci.yml`](.github/workflows/ci.yml): lint, tipos, tests y
-cobertura de backend y frontend, validación de Docker en ARM64, análisis de
+Cada PR ejecuta [`ci.yml`](.github/workflows/ci.yml): lint, formato, tipos,
+tests y cobertura de backend y frontend, validación de Docker en ARM64, análisis de
 SonarQube Cloud y Lighthouse para la accesibilidad. El check `ci-ok` resume el
 resultado. Más detalle en la [arquitectura del sistema](docs/architecture/arquitectura-sistema.md#4-integración-y-entrega-continua).
 

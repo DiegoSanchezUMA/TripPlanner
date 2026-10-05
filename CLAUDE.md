@@ -99,6 +99,6 @@ Instalación completa y resto de comandos: `README.md`.
 - Backend (desde `backend/`): `uv sync`, `uv run pytest --ignore=tests/load`,
   `uv run ruff check .`, `uv run pyright`, `uv run uvicorn app.main:app --reload`
 - Frontend (desde `frontend/`): `pnpm install`, `pnpm test:coverage`, `pnpm lint`,
-  `pnpm typecheck`, `pnpm dev`
+  `pnpm format:check` (Prettier, solo frontend), `pnpm typecheck`, `pnpm dev`
 - El backend lee la configuración solo de variables de entorno (no del `.env`);
   fuera de Docker, `DATABASE_URL` usa `localhost`, no `postgres`

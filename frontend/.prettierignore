@@ -1,0 +1,12 @@
+# Lo generado y lo de terceros no se formatea (D-029). node_modules ya lo
+# ignora Prettier por defecto.
+.next/
+out/
+coverage/
+storybook-static/
+next-env.d.ts
+pnpm-lock.yaml
+
+# Skills de Claude Code (de terceros); ESLint y tsconfig también las excluyen.
+.claude/
+skills-lock.json

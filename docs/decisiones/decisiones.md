@@ -35,6 +35,7 @@ arquitectura multiagente viven en `docs/arquitectura-multiagente-crewai.md`.
 | D-026 | Actions fijadas por SHA de commit y actualizadas a sus últimas versiones | Aceptada |
 | D-027 | Runners fijados a `ubuntu-24.04` en lugar de `ubuntu-latest` | Aceptada |
 | D-028 | Hooks de Git con Husky: lint-staged, commitlint y pre-push por partes | Aceptada |
+| D-029 | Prettier como formateador del frontend, en el pre-commit y en el CI | Aceptada |
 
 Formato de cada entrada: contexto, decisión, alternativas descartadas y
 consecuencias. Estados: **Aceptada**, **Pendiente** (decidida pero aún sin
@@ -1175,7 +1176,7 @@ sea rápido. Además, los mensajes de commit ya seguían Conventional Commits a 
 
 | Hook | Cuándo | Qué hace | Tiempo |
 |---|---|---|---|
-| `pre-commit` | `git commit` | `lint-staged`, solo sobre los ficheros preparados. `backend/**/*.py`: `ruff check --fix` y `ruff format`. `backend/pyproject.toml` o `uv.lock`: `uv lock --check`. `frontend/**/*.{ts,tsx,js,mjs,cjs}`: `eslint --fix`. Los arreglos automáticos se añaden al commit. Si queda algún error, el commit se cancela y los ficheros quedan como estaban. | Segundos |
+| `pre-commit` | `git commit` | `lint-staged`, solo sobre los ficheros preparados. `backend/**/*.py`: `ruff check --fix` y `ruff format`. `backend/pyproject.toml` o `uv.lock`: `uv lock --check`. `frontend/**/*.{ts,tsx,js,mjs,cjs}`: `eslint --fix` y después `prettier --write` (D-029). Los arreglos automáticos se añaden al commit. Si queda algún error, el commit se cancela y los ficheros quedan como estaban. | Segundos |
 | `commit-msg` | `git commit` | `commitlint` con `config-conventional`: formato `tipo(ámbito): resumen`, tipo de una lista cerrada, resumen que no empiece en mayúscula y líneas de 100 caracteres como máximo. | < 1 s |
 | `pre-push` | `git push` | Mira qué cambia en lo que se va a subir. Si toca `backend/`: `pyright` y `pytest` (sin los tests de carga). Si toca `frontend/` o `shared/`: `next typegen` + `tsc` y Vitest. | 15–50 s |
 
@@ -1190,8 +1191,9 @@ Por qué cada pieza:
 - **Tipos y tests en `pre-push`, no en `pre-commit`:** necesitan el proyecto
   entero y tardan decenas de segundos. Hacerlo en cada commit sería demasiado
   lento, pero los errores de tipos son justo los que `lint-staged` no ve.
-- **Sin formateador en el frontend:** el proyecto no usa Prettier, solo ESLint
-  (D-023), y añadirlo no forma parte de esta decisión.
+- **Formato del frontend:** al principio quedó fuera porque el frontend aún no
+  tenía código. Se corrigió en el mismo PR con Prettier (D-029), que el hook
+  aplica después de ESLint.
 
 **Alternativas descartadas.**
 - **El framework `pre-commit` de Python:** es el estándar en Python y admite
@@ -1221,3 +1223,57 @@ Por qué cada pieza:
 - Next.js sigue tomando `frontend/` como raíz a pesar del lockfile de la raíz:
   comprobado con `next build`, que no da ningún aviso.
 - Dependabot no actualiza estas dependencias (D-007).
+
+---
+
+## D-029 · Prettier como formateador del frontend, en el pre-commit y en el CI
+
+- **Fecha:** 2026-10-05
+- **Estado:** Aceptada
+
+**Contexto.** El backend tiene formateador (`ruff format`), que comprueban el CI
+y el `pre-commit`. El frontend solo tenía ESLint, que desde 2023 marca como
+obsoletas sus reglas de formato y recomienda usar un formateador aparte. Sin
+formateador, cada fichero acaba con un estilo distinto y los diffs mezclan
+cambios reales con cambios de espacios. Es más barato ponerlo ahora, con el
+frontend casi vacío.
+
+**Decisión.**
+- **Prettier 3.9.9** en `frontend/`, con **versión exacta**: la documentación
+  de Prettier lo recomienda porque hasta una versión parche puede cambiar el
+  formato. Es el mismo criterio que `ruff==0.16.10` en el backend (D-016).
+- **Configuración por defecto** salvo `printWidth: 100`, el mismo ancho que ruff
+  (D-023), en `frontend/prettier.config.mjs`.
+- **`eslint-config-prettier`** (versión plana) al final de la configuración de
+  ESLint: apaga las reglas de estilo que chocarían con Prettier. ESLint se ocupa
+  de la calidad del código y Prettier, del formato.
+- **`frontend/.prettierignore`:** lo generado (`.next/`, `coverage/`,
+  `storybook-static/`, `next-env.d.ts`), el lockfile y las skills de Claude Code,
+  que son de terceros (`.claude/`, `skills-lock.json`).
+- **Scripts** `format` y `format:check` en `frontend/package.json`.
+- **Dónde se aplica:**
+  - `pre-commit` (`lint-staged`): en `.ts`, `.tsx` y `.js`, primero
+    `eslint --fix` y después `prettier --write`, en orden para que no escriban
+    a la vez en el mismo fichero. En `.json`, `.css`, `.md` y `.yml`, solo
+    `prettier --write`.
+  - CI: paso `pnpm format:check` en el job `frontend`, después del lint. Es el
+    equivalente de `ruff format --check` en el backend.
+- **Solo en `frontend/`.** No se aplica a `docs/`, porque reformatearía las
+  tablas y los saltos de línea de toda la documentación del TFG en un único
+  diff enorme. Tampoco al backend, que ya tiene `ruff format`.
+
+**Alternativas descartadas.**
+- **Reglas de estilo de ESLint (`@stylistic`):** el propio ESLint desaconseja
+  usarlo como formateador, y Prettier es el estándar en Next.js y React.
+- **Biome:** formatea y hace lint más rápido, pero no cubre todas las reglas de
+  `eslint-config-next`. Habría dos herramientas solapadas igualmente.
+
+**Consecuencias.**
+- El primer formateo solo cambió `tsconfig.json`: los arrays pasan a una línea.
+  Next no lo reescribe en `next typegen` ni en `next build` (comprobado), así
+  que no se pelean.
+- Con la extensión de Prettier, el editor puede formatear al guardar, porque
+  lee la configuración de `frontend/`. No es obligatorio: el hook lo aplica
+  igualmente.
+- Dependabot no actualiza Prettier (D-007). Subir de versión es un cambio
+  manual, y puede requerir reformatear en un commit `style:` aparte.

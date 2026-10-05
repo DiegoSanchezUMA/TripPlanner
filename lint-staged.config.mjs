@@ -16,6 +16,15 @@ export default {
   // función para que no reciba la lista de ficheros.
   "backend/{pyproject.toml,uv.lock}": () => "uv lock --directory backend --check",
 
-  // Frontend: ESLint con la configuración de frontend/ (D-023).
-  "frontend/**/*.{ts,tsx,js,mjs,cjs}": "pnpm --dir frontend exec eslint --fix --no-warn-ignored",
+  // Frontend: ESLint arregla lo que puede y después Prettier da el formato
+  // final (D-023, D-029). Van en orden dentro del mismo grupo para que no
+  // escriban a la vez en el mismo fichero.
+  "frontend/**/*.{ts,tsx,js,mjs,cjs}": [
+    "pnpm --dir frontend exec eslint --fix --no-warn-ignored",
+    "pnpm --dir frontend exec prettier --write",
+  ],
+
+  // Resto de ficheros del frontend que formatea Prettier. Lo que excluye
+  // frontend/.prettierignore (lockfile, skills…) se salta aunque esté aquí.
+  "frontend/**/*.{json,css,md,yml,yaml}": "pnpm --dir frontend exec prettier --write",
 };
