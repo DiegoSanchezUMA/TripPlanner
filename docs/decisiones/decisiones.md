@@ -33,6 +33,7 @@ arquitectura multiagente viven en `docs/arquitectura-multiagente-crewai.md`.
 | D-024 | pnpm no ejecuta scripts de instalación de dependencias | Aceptada |
 | D-025 | Entorno de desarrollo local en Windows: uv, Corepack y `.venv` | Aceptada |
 | D-026 | Actions fijadas por SHA de commit y actualizadas a sus últimas versiones | Aceptada |
+| D-027 | Runners fijados a `ubuntu-24.04` en lugar de `ubuntu-latest` | Aceptada |
 
 Formato de cada entrada: contexto, decisión, alternativas descartadas y
 consecuencias. Estados: **Aceptada**, **Pendiente** (decidida pero aún sin
@@ -1114,3 +1115,36 @@ con `version: "0.12.23"` y `uvx locust==2.46.6`.
 - No se puede probar en local: `actionlint` valida la sintaxis y las
   expresiones de los workflows, pero los parámetros de cada Action se han
   comprobado leyendo su `action.yml`. La prueba real es el primer PR.
+
+---
+
+## D-027 · Runners fijados a `ubuntu-24.04` en lugar de `ubuntu-latest`
+
+- **Fecha:** 2026-10-05
+- **Estado:** Aceptada
+
+**Contexto.** En el PR #1, todos los jobs avisaban de que `ubuntu-latest`
+pasará a Ubuntu 26.04. GitHub lo hará de forma gradual entre el 19 de octubre
+y el 19 de noviembre de 2026 (actions/runner-images#14748). Cambian el sistema
+operativo, el kernel y parte del software preinstalado, del que dependen los
+workflows: el `psql` del paso "Extensión pgvector" del job `backend`, y Docker y
+Compose. Con `ubuntu-latest`, el cambio llegaría sin que nadie lo decidiera.
+Además, durante la migración, unos jobs correrían en 24.04 y otros en 26.04.
+
+**Decisión.** Todos los jobs x64 usan `runs-on: ubuntu-24.04`: `ci.yml` y
+`lighthouse.yml`, y también los workflows aplazados (`deploy-backend.yml`,
+`llm-evals.yml` y `load-test.yml`). El job `docker` ya usaba
+`ubuntu-24.04-arm`, que no entra en la migración.
+
+**Alternativas descartadas.**
+- **Seguir con `ubuntu-latest`:** se actualiza solo, pero el cambio llega sin
+  control y en mitad de otro trabajo.
+- **Pasar ya a `ubuntu-26.04`:** posible, pero ahora no aporta nada y la imagen
+  es más reciente y menos probada.
+
+**Consecuencias.**
+- Dependabot no actualiza las etiquetas de los runners. Pasar a 26.04 es un
+  cambio manual, en un PR propio, cuando se decida o cuando GitHub anuncie la
+  retirada de 24.04.
+- Python, Node, uv y pnpm no dependen del runner: los fijan las Actions (D-016,
+  D-018).

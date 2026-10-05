@@ -102,7 +102,9 @@ docker compose --env-file ../env/.env up -d
 
 Todo en GitHub Actions (`.github/workflows/`). Todos los workflows dan al
 `GITHUB_TOKEN` solo permiso de lectura (`contents: read`), y todas las Actions
-se referencian por SHA de commit, con la versión en un comentario (D-026).
+se referencian por SHA de commit, con la versión en un comentario (D-026). Los
+runners están fijados a `ubuntu-24.04` (y `ubuntu-24.04-arm`), no a
+`ubuntu-latest` (D-027).
 
 | Workflow | Disparador | Qué hace |
 |---|---|---|
