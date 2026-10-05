@@ -33,6 +33,10 @@ arquitectura multiagente viven en `docs/arquitectura-multiagente-crewai.md`.
 | D-024 | pnpm no ejecuta scripts de instalación de dependencias | Aceptada |
 | D-025 | Entorno de desarrollo local en Windows: uv, Corepack y `.venv` | Aceptada |
 | D-026 | Actions fijadas por SHA de commit y actualizadas a sus últimas versiones | Aceptada |
+| D-027 | Runners fijados a `ubuntu-24.04` en lugar de `ubuntu-latest` | Aceptada |
+| D-028 | Hooks de Git con Husky: lint-staged, commitlint y pre-push por partes | Aceptada |
+| D-029 | Prettier como formateador del frontend, en el pre-commit y en el CI | Aceptada |
+| D-030 | Configuración compartida de VS Code: extensiones recomendadas y formato al guardar | Aceptada |
 
 Formato de cada entrada: contexto, decisión, alternativas descartadas y
 consecuencias. Estados: **Aceptada**, **Pendiente** (decidida pero aún sin
@@ -1114,3 +1118,242 @@ con `version: "0.12.23"` y `uvx locust==2.46.6`.
 - No se puede probar en local: `actionlint` valida la sintaxis y las
   expresiones de los workflows, pero los parámetros de cada Action se han
   comprobado leyendo su `action.yml`. La prueba real es el primer PR.
+
+---
+
+## D-027 · Runners fijados a `ubuntu-24.04` en lugar de `ubuntu-latest`
+
+- **Fecha:** 2026-10-05
+- **Estado:** Aceptada
+
+**Contexto.** En el PR #1, todos los jobs avisaban de que `ubuntu-latest`
+pasará a Ubuntu 26.04. GitHub lo hará de forma gradual entre el 19 de octubre
+y el 19 de noviembre de 2026 (actions/runner-images#14748). Cambian el sistema
+operativo, el kernel y parte del software preinstalado, del que dependen los
+workflows: el `psql` del paso "Extensión pgvector" del job `backend`, y Docker y
+Compose. Con `ubuntu-latest`, el cambio llegaría sin que nadie lo decidiera.
+Además, durante la migración, unos jobs correrían en 24.04 y otros en 26.04.
+
+**Decisión.** Todos los jobs x64 usan `runs-on: ubuntu-24.04`: `ci.yml` y
+`lighthouse.yml`, y también los workflows aplazados (`deploy-backend.yml`,
+`llm-evals.yml` y `load-test.yml`). El job `docker` ya usaba
+`ubuntu-24.04-arm`, que no entra en la migración.
+
+**Alternativas descartadas.**
+- **Seguir con `ubuntu-latest`:** se actualiza solo, pero el cambio llega sin
+  control y en mitad de otro trabajo.
+- **Pasar ya a `ubuntu-26.04`:** posible, pero ahora no aporta nada y la imagen
+  es más reciente y menos probada.
+
+**Consecuencias.**
+- Dependabot no actualiza las etiquetas de los runners. Pasar a 26.04 es un
+  cambio manual, en un PR propio, cuando se decida o cuando GitHub anuncie la
+  retirada de 24.04.
+- Python, Node, uv y pnpm no dependen del runner: los fijan las Actions (D-016,
+  D-018).
+
+---
+
+## D-028 · Hooks de Git con Husky: lint-staged, commitlint y pre-push por partes
+
+- **Fecha:** 2026-10-05
+- **Estado:** Aceptada
+
+**Contexto.** El CI detecta los errores, pero después del push: cada fallo
+cuesta varios minutos y deja un PR en rojo. Interesa detectar lo mismo en local,
+antes del commit, por separado para el backend (uv, ruff, pyright, pytest) y el
+frontend (pnpm, ESLint, tsc, Vitest), y revisando solo lo que cambia para que
+sea rápido. Además, los mensajes de commit ya seguían Conventional Commits a mano
+(`feat:`, `chore:`, `ci:`), igual que Dependabot (prefijo `ci`, D-007).
+
+**Decisión.**
+- **Husky 9** en un `package.json` de herramientas en la raíz
+  (`tripplanner-tooling`), con su propio `pnpm-lock.yaml`. No es un workspace de
+  pnpm: `frontend/` sigue siendo un proyecto independiente, con su propio
+  `package.json`, lockfile y `pnpm-workspace.yaml`, así que el CI y Vercel no
+  cambian. Al hacer `pnpm install` en la raíz se ejecuta `prepare: husky`, que
+  apunta Git a `.husky/_` (`core.hooksPath`).
+- **Tres hooks:**
+
+| Hook | Cuándo | Qué hace | Tiempo |
+|---|---|---|---|
+| `pre-commit` | `git commit` | `lint-staged`, solo sobre los ficheros preparados. `backend/**/*.py`: `ruff check --fix` y `ruff format`. `backend/pyproject.toml` o `uv.lock`: `uv lock --check`. `frontend/**/*.{ts,tsx,js,mjs,cjs}`: `eslint --fix` y después `prettier --write` (D-029). Los arreglos automáticos se añaden al commit. Si queda algún error, el commit se cancela y los ficheros quedan como estaban. | Segundos |
+| `commit-msg` | `git commit` | `commitlint` con `config-conventional`: formato `tipo(ámbito): resumen`, tipo de una lista cerrada, resumen que no empiece en mayúscula y líneas de 100 caracteres como máximo. | < 1 s |
+| `pre-push` | `git push` | Mira qué cambia en lo que se va a subir. Si toca `backend/`: `pyright` y `pytest` (sin los tests de carga). Si toca `frontend/` o `shared/`: `next typegen` + `tsc` y Vitest. | 15–50 s |
+
+- **Mismas herramientas y versiones que el CI:** ruff y pyright se ejecutan con
+  `uv run --frozen` (versiones de `uv.lock`); ESLint, tsc y Vitest, desde
+  `frontend/node_modules` (versiones de `pnpm-lock.yaml`).
+
+Por qué cada pieza:
+- **`uv lock --check`:** el CI instala con `uv sync --frozen`, que usa
+  `uv.lock` tal cual sin comprobar que coincide con `pyproject.toml`. Un cambio
+  de dependencias sin `uv lock` pasaría el CI con las versiones antiguas.
+- **Tipos y tests en `pre-push`, no en `pre-commit`:** necesitan el proyecto
+  entero y tardan decenas de segundos. Hacerlo en cada commit sería demasiado
+  lento, pero los errores de tipos son justo los que `lint-staged` no ve.
+- **Formato del frontend:** al principio quedó fuera porque el frontend aún no
+  tenía código. Se corrigió en el mismo PR con Prettier (D-029), que el hook
+  aplica después de ESLint.
+
+**Alternativas descartadas.**
+- **El framework `pre-commit` de Python:** es el estándar en Python y admite
+  hooks de cualquier lenguaje, pero añade otra herramienta y otro fichero de
+  versiones. Husky y `lint-staged` cubren lo mismo con pnpm, que ya se usa.
+- **Husky dentro de `frontend/package.json`** (`prepare: cd .. && husky
+  frontend/.husky`): evita el `package.json` de la raíz, pero los hooks del
+  backend vivirían dentro de `frontend/` y las herramientas de commit se
+  mezclarían con las dependencias de la aplicación, que se instalan en Vercel.
+- **Un workspace de pnpm en la raíz** con `frontend` como paquete: movería el
+  lockfile del frontend a la raíz y obligaría a cambiar el CI, Vercel y D-024.
+
+**Consecuencias.**
+- Tras clonar hay que ejecutar `pnpm install` una vez en la raíz. Sin eso no hay
+  hooks: Git no los activa solo.
+- Los hooks se pueden saltar (`--no-verify`), así que el CI sigue siendo la
+  barrera de verdad. El CI no comprueba los mensajes de commit. Hay dos mejoras
+  posibles: un job que valide los mensajes del PR, y `uv sync --locked` en lugar
+  de `--frozen` para que el CI también detecte un `uv.lock` desfasado.
+- En Windows, los hooks se ejecutan con el `sh` de Git for Windows y necesitan
+  `uv` y `pnpm` en el PATH. Si el editor no los encuentra, hay que reiniciarlo
+  después de instalarlos. `.gitattributes` ya fuerza LF, así que los hooks no se
+  rompen por CRLF.
+- `engines` pide Node 24, como el frontend (D-018). Con Node 22, pnpm avisa,
+  pero las herramientas funcionan: `lint-staged` pide Node 22.22.1 o superior y
+  `commitlint`, 22.12 o superior.
+- Next.js sigue tomando `frontend/` como raíz a pesar del lockfile de la raíz:
+  comprobado con `next build`, que no da ningún aviso.
+- Dependabot no actualiza estas dependencias (D-007).
+
+---
+
+## D-029 · Prettier como formateador del frontend, en el pre-commit y en el CI
+
+- **Fecha:** 2026-10-05
+- **Estado:** Aceptada
+
+**Contexto.** El backend tiene formateador (`ruff format`), que comprueban el CI
+y el `pre-commit`. El frontend solo tenía ESLint, que desde 2023 marca como
+obsoletas sus reglas de formato y recomienda usar un formateador aparte. Sin
+formateador, cada fichero acaba con un estilo distinto y los diffs mezclan
+cambios reales con cambios de espacios. Es más barato ponerlo ahora, con el
+frontend casi vacío.
+
+**Decisión.**
+- **Prettier 3.9.9** en `frontend/`, con **versión exacta**: la documentación
+  de Prettier lo recomienda porque hasta una versión parche puede cambiar el
+  formato. Es el mismo criterio que `ruff==0.16.10` en el backend (D-016).
+- **Configuración por defecto** salvo `printWidth: 100`, el mismo ancho que ruff
+  (D-023), en `frontend/prettier.config.mjs`.
+- **`eslint-config-prettier`** (versión plana) al final de la configuración de
+  ESLint: apaga las reglas de estilo que chocarían con Prettier. ESLint se ocupa
+  de la calidad del código y Prettier, del formato. Hoy no apaga ninguna regla
+  activa, porque `eslint-config-next` no trae reglas de formato (comprobado con
+  la CLI de `eslint-config-prettier`). Está como protección por si en el futuro
+  se añade un preset que sí las tenga. Va la última porque, en la configuración
+  plana, si dos bloques configuran la misma regla gana el último.
+- **`frontend/.prettierignore`:** lo generado (`.next/`, `coverage/`,
+  `storybook-static/`, `next-env.d.ts`), el lockfile y las skills de Claude Code,
+  que son de terceros (`.claude/`, `skills-lock.json`).
+- **Scripts** `format` y `format:check` en `frontend/package.json`.
+- **Dónde se aplica:**
+  - `pre-commit` (`lint-staged`): en `.ts`, `.tsx` y `.js`, primero
+    `eslint --fix` y después `prettier --write`, en orden para que no escriban
+    a la vez en el mismo fichero. En `.json`, `.css`, `.md` y `.yml`, solo
+    `prettier --write`.
+  - CI: paso `pnpm format:check` en el job `frontend`, después del lint. Es el
+    equivalente de `ruff format --check` en el backend.
+- **Solo en `frontend/`.** No se aplica a `docs/`, porque reformatearía las
+  tablas y los saltos de línea de toda la documentación del TFG en un único
+  diff enorme. Tampoco al backend, que ya tiene `ruff format`.
+
+**Alternativas descartadas.**
+- **Reglas de estilo de ESLint (`@stylistic`):** el propio ESLint desaconseja
+  usarlo como formateador, y Prettier es el estándar en Next.js y React.
+- **Biome:** formatea y hace lint más rápido, pero no cubre todas las reglas de
+  `eslint-config-next`. Habría dos herramientas solapadas igualmente.
+- **`eslint-plugin-prettier`** (Prettier dentro de ESLint, como la regla
+  `prettier/prettier`): la documentación de Prettier lo desaconseja en general.
+  Llena el editor de subrayados rojos por cosas de formato, es más lento que
+  ejecutar Prettier directamente y añade una capa más que puede fallar. Su
+  configuración recomendada tiene que desactivar además reglas que no son de
+  formato (`arrow-body-style` y `prefer-arrow-callback`). Aquí, encima,
+  duplicaría trabajo: Prettier ya se ejecuta en el `pre-commit` y en el CI
+  (`format:check`), y los errores de formato se mezclarían con los problemas
+  reales del lint.
+
+**Consecuencias.**
+- El primer formateo solo cambió `tsconfig.json`: los arrays pasan a una línea.
+  Next no lo reescribe en `next typegen` ni en `next build` (comprobado), así
+  que no se pelean.
+- Con la extensión de Prettier, el editor puede formatear al guardar, porque
+  lee la configuración de `frontend/`. No es obligatorio: el hook lo aplica
+  igualmente.
+- Dependabot no actualiza Prettier (D-007). Subir de versión es un cambio
+  manual, y puede requerir reformatear en un commit `style:` aparte.
+
+---
+
+## D-030 · Configuración compartida de VS Code: extensiones recomendadas y formato al guardar
+
+- **Fecha:** 2026-10-05
+- **Estado:** Aceptada
+
+**Contexto.** Los hooks (D-028, D-029) aplican el lint y el formato al hacer
+commit, pero en el editor no se veía nada hasta ese momento. Además, se
+comprobó que Pylance no aplicaba el modo estricto de pyright (D-023): busca la
+configuración en la raíz del proyecto abierto, y la de este proyecto está en
+`backend/pyproject.toml`. Una función sin tipos no daba ningún aviso en el
+editor, aunque el `pre-push` y el CI la rechazarían. Por último, `.vscode/`
+estaba entero en `.gitignore`, así que no se podía compartir ninguna
+configuración.
+
+**Decisión.**
+- **`.gitignore`:** `.vscode/*`, con excepciones para `extensions.json` y
+  `settings.json`. El resto de `.vscode/` sigue siendo de cada uno.
+- **`.vscode/extensions.json`:** VS Code sugiere instalar estas extensiones al
+  abrir el proyecto.
+
+| Extensión | Parte | Para qué |
+|---|---|---|
+| Prettier (`esbenp.prettier-vscode`) | Frontend | Formatear al guardar (D-029) |
+| ESLint (`dbaeumer.vscode-eslint`) | Frontend | Errores en el editor y arreglos al guardar |
+| Vitest (`vitest.explorer`) | Frontend | Ver y ejecutar los tests desde el editor |
+| Python y Pylance (`ms-python.python`, `ms-python.vscode-pylance`) | Backend | Intérprete de `backend/.venv` y tipos en modo estricto |
+| Ruff (`charliermarsh.ruff`) | Backend | Lint, orden de imports y formato al guardar |
+| SonarQube for IDE (`sonarsource.sonarlint-vscode`) | Todo | Las reglas del quality gate en el editor (D-002) |
+| GitHub Actions (`github.vscode-github-actions`) | Todo | Validar los workflows al editarlos |
+
+- **`.vscode/settings.json`:** al guardar se hace lo mismo que en los hooks.
+  - **Frontend:** en `.ts`, `.tsx` y `.js`, `eslint --fix` y después Prettier;
+    en `.json` y `.css`, Prettier. Con `prettier.requireConfig`, Prettier solo
+    actúa donde encuentra configuración, es decir, en `frontend/`: no toca
+    `docs/`, los workflows ni la raíz. `prettier.ignorePath` apunta a
+    `frontend/.prettierignore`, así que el lockfile y las skills quedan
+    excluidos (comprobado con la API de Prettier).
+    `eslint.workingDirectories` le indica a ESLint que su configuración está
+    en `frontend/`.
+  - **Backend:** Ruff arregla, ordena los imports y formatea.
+    `python.analysis.typeCheckingMode: "strict"` iguala Pylance con pyright, e
+    ignora `backend/tests/load` como hace `pyproject.toml`.
+  - **SonarQube for IDE**, en modo conectado. Ya estaba configurado así.
+
+**Alternativas descartadas.**
+- **Un workspace multirraíz (`.code-workspace`)** con `backend/` y `frontend/`
+  como carpetas: Pylance leería `backend/pyproject.toml` directamente, pero
+  obligaría a abrir siempre el proyecto con ese fichero en lugar de con la
+  carpeta.
+- **Copiar la configuración de pyright en un `pyrightconfig.json` en la
+  raíz:** habría dos fuentes de verdad para lo mismo.
+- **Formato solo en los hooks:** funciona, pero los errores se ven tarde.
+
+**Consecuencias.**
+- El editor marca lo mismo que el CI. Comprobado: la función sin tipos da en
+  Pylance los mismos errores que pyright en modo estricto, y el `locustfile` no
+  da ninguno. Si cambia `typeCheckingMode` en `pyproject.toml`, hay que
+  cambiarlo también aquí.
+- Formatear al guardar es una comodidad: la barrera sigue siendo hook + CI.
+- El `connectionId` de SonarQube es de la cuenta del autor. Quien clone el repo
+  sin esa conexión verá un aviso de la extensión, y no afecta a nada más.
+- El intérprete (`backend/.venv`) se elige a mano (README), porque su ruta
+  cambia entre Windows (`Scripts/`) y Linux o macOS (`bin/`).

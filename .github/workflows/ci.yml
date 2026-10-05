@@ -17,7 +17,7 @@ jobs:
   # 1. Detecta qué partes del repo han cambiado
   # ---------------------------------------------------------------
   changes:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       pull-requests: read
     outputs:
@@ -55,7 +55,7 @@ jobs:
   backend:
     needs: changes
     if: needs.changes.outputs.backend == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: backend
@@ -132,7 +132,7 @@ jobs:
   frontend:
     needs: changes
     if: needs.changes.outputs.frontend == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: frontend
@@ -158,6 +158,9 @@ jobs:
 
       - name: Lint
         run: pnpm lint
+
+      - name: Formato (prettier --check)
+        run: pnpm format:check
 
       - name: Tipos (tsc --noEmit)
         run: pnpm typecheck
@@ -187,7 +190,7 @@ jobs:
   contracts:
     needs: changes
     if: needs.changes.outputs.contracts == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -282,7 +285,7 @@ jobs:
       !contains(needs.*.result, 'cancelled') &&
       (needs.backend.result == 'success' || needs.frontend.result == 'success') &&
       (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -311,7 +314,7 @@ jobs:
   ci-ok:
     needs: [backend, frontend, contracts, docker, sonar]
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Comprobar resultado
         run: |

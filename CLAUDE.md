@@ -92,7 +92,13 @@ aísla por usuario — ver documento de arquitectura §5 antes de tocar esto).
   `docs/requisitos.md` (qué construir) y `docs/data-model/modelo-datos.md` (esquema).
 
 ## Comandos
-- `docker compose up -d --build` — levantar entorno local
+Instalación completa y resto de comandos: `README.md`.
+- `pnpm install` (en la raíz) — instala Husky y activa los hooks de Git (D-028)
+- `docker compose --env-file ../env/.env up -d` (desde `infra/docker/`) — Postgres local
 - `docker compose ps` / `docker stats --no-stream` — estado y consumo
-- `make test` — tests backend (pytest) y frontend (Vitest + Testing Library)
-- `uv run ruff check` — lint backend
+- Backend (desde `backend/`): `uv sync`, `uv run pytest --ignore=tests/load`,
+  `uv run ruff check .`, `uv run pyright`, `uv run uvicorn app.main:app --reload`
+- Frontend (desde `frontend/`): `pnpm install`, `pnpm test:coverage`, `pnpm lint`,
+  `pnpm format:check` (Prettier, solo frontend), `pnpm typecheck`, `pnpm dev`
+- El backend lee la configuración solo de variables de entorno (no del `.env`);
+  fuera de Docker, `DATABASE_URL` usa `localhost`, no `postgres`

@@ -33,7 +33,11 @@ next-env.d.ts
 infra/postgres/data/
 
 # Editor / SO
-.vscode/
+# De .vscode/ solo se comparten las extensiones recomendadas y la
+# configuración del proyecto (D-030); lo demás es de cada uno.
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
 .idea/
 .DS_Store
 Thumbs.db
