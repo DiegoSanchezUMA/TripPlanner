@@ -1,0 +1,16 @@
+{
+  // VS Code sugiere instalar estas extensiones al abrir el proyecto (D-030).
+  "recommendations": [
+    // Frontend
+    "esbenp.prettier-vscode",
+    "dbaeumer.vscode-eslint",
+    "vitest.explorer",
+    // Backend
+    "ms-python.python",
+    "ms-python.vscode-pylance",
+    "charliermarsh.ruff",
+    // Todo el repo
+    "sonarsource.sonarlint-vscode",
+    "github.vscode-github-actions"
+  ]
+}

@@ -173,6 +173,24 @@ verbo.
 En un apuro, `git commit --no-verify` o `git push --no-verify` se saltan los
 hooks. El CI sigue comprobándolo todo en el PR.
 
+## Editor (VS Code)
+
+Al abrir la carpeta del proyecto, VS Code sugiere instalar las extensiones de
+[`.vscode/extensions.json`](.vscode/extensions.json): acepta *Install All*.
+Después, elige `backend/.venv` como intérprete de Python (*Python: Select
+Interpreter*). Con eso, al guardar un fichero pasa lo mismo que en el
+`pre-commit` ([D-030](docs/decisiones/decisiones.md)):
+
+| Al guardar… | Se aplica |
+|---|---|
+| `.ts`, `.tsx`, `.js` del frontend | ESLint arregla lo que puede y Prettier formatea |
+| `.json`, `.css` del frontend | Prettier formatea |
+| `.py` del backend | Ruff arregla, ordena los imports y formatea |
+
+Pylance comprueba los tipos en modo estricto, igual que pyright en el CI.
+SonarQube for IDE muestra en el editor las reglas del quality gate. Prettier
+nunca toca nada fuera de `frontend/`.
+
 ## Problemas frecuentes en Windows
 
 - **`uv` o `pnpm` no se encuentran justo después de instalarlos:** abre una
@@ -196,6 +214,7 @@ infra/      Docker Compose, scripts de Postgres y plantilla de variables de ento
 docs/       Diseño, requisitos, decisiones y diagramas
 .github/    CI (GitHub Actions) y Dependabot
 .husky/     Hooks de Git
+.vscode/    Extensiones recomendadas y configuración del editor
 ```
 
 ## Documentación

@@ -36,6 +36,7 @@ arquitectura multiagente viven en `docs/arquitectura-multiagente-crewai.md`.
 | D-027 | Runners fijados a `ubuntu-24.04` en lugar de `ubuntu-latest` | Aceptada |
 | D-028 | Hooks de Git con Husky: lint-staged, commitlint y pre-push por partes | Aceptada |
 | D-029 | Prettier como formateador del frontend, en el pre-commit y en el CI | Aceptada |
+| D-030 | Configuración compartida de VS Code: extensiones recomendadas y formato al guardar | Aceptada |
 
 Formato de cada entrada: contexto, decisión, alternativas descartadas y
 consecuencias. Estados: **Aceptada**, **Pendiente** (decidida pero aún sin
@@ -1290,3 +1291,69 @@ frontend casi vacío.
   igualmente.
 - Dependabot no actualiza Prettier (D-007). Subir de versión es un cambio
   manual, y puede requerir reformatear en un commit `style:` aparte.
+
+---
+
+## D-030 · Configuración compartida de VS Code: extensiones recomendadas y formato al guardar
+
+- **Fecha:** 2026-10-05
+- **Estado:** Aceptada
+
+**Contexto.** Los hooks (D-028, D-029) aplican el lint y el formato al hacer
+commit, pero en el editor no se veía nada hasta ese momento. Además, se
+comprobó que Pylance no aplicaba el modo estricto de pyright (D-023): busca la
+configuración en la raíz del proyecto abierto, y la de este proyecto está en
+`backend/pyproject.toml`. Una función sin tipos no daba ningún aviso en el
+editor, aunque el `pre-push` y el CI la rechazarían. Por último, `.vscode/`
+estaba entero en `.gitignore`, así que no se podía compartir ninguna
+configuración.
+
+**Decisión.**
+- **`.gitignore`:** `.vscode/*`, con excepciones para `extensions.json` y
+  `settings.json`. El resto de `.vscode/` sigue siendo de cada uno.
+- **`.vscode/extensions.json`:** VS Code sugiere instalar estas extensiones al
+  abrir el proyecto.
+
+| Extensión | Parte | Para qué |
+|---|---|---|
+| Prettier (`esbenp.prettier-vscode`) | Frontend | Formatear al guardar (D-029) |
+| ESLint (`dbaeumer.vscode-eslint`) | Frontend | Errores en el editor y arreglos al guardar |
+| Vitest (`vitest.explorer`) | Frontend | Ver y ejecutar los tests desde el editor |
+| Python y Pylance (`ms-python.python`, `ms-python.vscode-pylance`) | Backend | Intérprete de `backend/.venv` y tipos en modo estricto |
+| Ruff (`charliermarsh.ruff`) | Backend | Lint, orden de imports y formato al guardar |
+| SonarQube for IDE (`sonarsource.sonarlint-vscode`) | Todo | Las reglas del quality gate en el editor (D-002) |
+| GitHub Actions (`github.vscode-github-actions`) | Todo | Validar los workflows al editarlos |
+
+- **`.vscode/settings.json`:** al guardar se hace lo mismo que en los hooks.
+  - **Frontend:** en `.ts`, `.tsx` y `.js`, `eslint --fix` y después Prettier;
+    en `.json` y `.css`, Prettier. Con `prettier.requireConfig`, Prettier solo
+    actúa donde encuentra configuración, es decir, en `frontend/`: no toca
+    `docs/`, los workflows ni la raíz. `prettier.ignorePath` apunta a
+    `frontend/.prettierignore`, así que el lockfile y las skills quedan
+    excluidos (comprobado con la API de Prettier).
+    `eslint.workingDirectories` le indica a ESLint que su configuración está
+    en `frontend/`.
+  - **Backend:** Ruff arregla, ordena los imports y formatea.
+    `python.analysis.typeCheckingMode: "strict"` iguala Pylance con pyright, e
+    ignora `backend/tests/load` como hace `pyproject.toml`.
+  - **SonarQube for IDE**, en modo conectado. Ya estaba configurado así.
+
+**Alternativas descartadas.**
+- **Un workspace multirraíz (`.code-workspace`)** con `backend/` y `frontend/`
+  como carpetas: Pylance leería `backend/pyproject.toml` directamente, pero
+  obligaría a abrir siempre el proyecto con ese fichero en lugar de con la
+  carpeta.
+- **Copiar la configuración de pyright en un `pyrightconfig.json` en la
+  raíz:** habría dos fuentes de verdad para lo mismo.
+- **Formato solo en los hooks:** funciona, pero los errores se ven tarde.
+
+**Consecuencias.**
+- El editor marca lo mismo que el CI. Comprobado: la función sin tipos da en
+  Pylance los mismos errores que pyright en modo estricto, y el `locustfile` no
+  da ninguno. Si cambia `typeCheckingMode` en `pyproject.toml`, hay que
+  cambiarlo también aquí.
+- Formatear al guardar es una comodidad: la barrera sigue siendo hook + CI.
+- El `connectionId` de SonarQube es de la cuenta del autor. Quien clone el repo
+  sin esa conexión verá un aviso de la extensión, y no afecta a nada más.
+- El intérprete (`backend/.venv`) se elige a mano (README), porque su ruta
+  cambia entre Windows (`Scripts/`) y Linux o macOS (`bin/`).

@@ -1,0 +1,57 @@
+{
+  // Configuración compartida del editor (D-030): hace al guardar lo mismo que
+  // los hooks de Git hacen al commitear (D-028, D-029).
+
+  // SonarQube for IDE conectado al proyecto de SonarQube Cloud (mismas reglas
+  // que el quality gate, D-002).
+  "sonarlint.connectedMode.project": {
+    "connectionId": "diegosanchezuma",
+    "projectKey": "DiegoSanchezUMA_TripPlanner"
+  },
+
+  // ---- Frontend: ESLint arregla lo que puede y luego Prettier formatea ----
+  // Prettier solo actúa donde encuentra configuración, es decir, en frontend/:
+  // nunca toca docs/, los workflows ni los ficheros de la raíz.
+  "prettier.requireConfig": true,
+  "prettier.ignorePath": "frontend/.prettierignore",
+  "eslint.workingDirectories": ["./frontend"],
+  "[typescript]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode",
+    "editor.formatOnSave": true,
+    "editor.codeActionsOnSave": { "source.fixAll.eslint": "explicit" }
+  },
+  "[typescriptreact]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode",
+    "editor.formatOnSave": true,
+    "editor.codeActionsOnSave": { "source.fixAll.eslint": "explicit" }
+  },
+  "[javascript]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode",
+    "editor.formatOnSave": true,
+    "editor.codeActionsOnSave": { "source.fixAll.eslint": "explicit" }
+  },
+  "[json]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode",
+    "editor.formatOnSave": true
+  },
+  "[css]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode",
+    "editor.formatOnSave": true
+  },
+
+  // ---- Backend: Ruff arregla, ordena los imports y formatea ----
+  "[python]": {
+    "editor.defaultFormatter": "charliermarsh.ruff",
+    "editor.formatOnSave": true,
+    "editor.codeActionsOnSave": {
+      "source.fixAll.ruff": "explicit",
+      "source.organizeImports.ruff": "explicit"
+    }
+  },
+  // Pylance busca la configuración de pyright en la raíz y la del proyecto
+  // está en backend/pyproject.toml: sin esto, el editor no aplicaría el modo
+  // estricto que exigen el pre-push y el CI (D-023). Los tests de carga se
+  // ignoran igual que en pyproject (Locust no está en el entorno).
+  "python.analysis.typeCheckingMode": "strict",
+  "python.analysis.ignore": ["backend/tests/load"]
+}
