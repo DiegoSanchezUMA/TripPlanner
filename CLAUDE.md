@@ -34,8 +34,10 @@ RefinementCrew (4–5 tareas, 3–4 agentes, sin Travel Planner). Guardrails det
 (anclaje, horario, presupuesto, dieta, accesibilidad, ritmo…) + probabilísticos
 (rúbrica LLM-as-a-judge, 5 dimensiones). Contratos de datos: **Pydantic siempre**,
 sin agente formateador. Memoria: pgvector solo con hechos del usuario (nunca datos
-del mundo); memoria nativa de CrewAI solo *short-term* efímera en producción (no
-aísla por usuario — ver documento de arquitectura §5 antes de tocar esto).
+del mundo); memoria nativa de CrewAI (unificada sobre LanceDB en 1.15) solo con un
+almacén efímero propio de cada ejecución en producción, con ruta explícita y no
+`CREWAI_STORAGE_DIR` (global al proceso). No aísla por usuario: ver documento de
+arquitectura §5 y D-035 antes de tocar esto.
 
 ## Estructura del repo (real, verificar antes de asumir `apps/`)
 - `frontend/` — Next.js, Vercel (incluye `.storybook/`, `stories/`, `tests/`)
@@ -94,7 +96,8 @@ aísla por usuario — ver documento de arquitectura §5 antes de tocar esto).
 ## Comandos
 Instalación completa y resto de comandos: `README.md`.
 - `pnpm install` (en la raíz) — instala Husky y activa los hooks de Git (D-028)
-- `docker compose --env-file ../env/.env up -d` (desde `infra/docker/`) — Postgres local
+- `docker compose --env-file ../env/.env up -d --build --wait` (desde `infra/docker/`) —
+  Postgres + API local (imagen multietapa en `infra/docker/backend/Dockerfile`, D-034)
 - `docker compose ps` / `docker stats --no-stream` — estado y consumo
 - Backend (desde `backend/`): `uv sync`, `uv run pytest --ignore=tests/load`,
   `uv run ruff check .`, `uv run pyright`, `uv run uvicorn app.main:app --reload`

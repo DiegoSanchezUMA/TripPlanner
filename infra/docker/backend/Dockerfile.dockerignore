@@ -1,0 +1,12 @@
+# Contexto de build del backend (D-034). Lista blanca: se ignora todo y solo se
+# deja pasar lo que usa el Dockerfile. Así no entran .venv, tests ni informes, y
+# un cambio en ellos no invalida la caché.
+*
+!app/
+!alembic.ini
+!pyproject.toml
+!uv.lock
+
+# Restos de ejecuciones locales dentro de app/
+**/__pycache__
+**/*.pyc

@@ -87,13 +87,14 @@ puerto de Postgres al host: solo es accesible por la red interna de Docker.
 | Evals | — | Entorno de GitHub `evals` | Hipótesis sobre el LLM (`plan-de-pruebas.md`) |
 | Producción | `tripplanner` en la VM | Entorno de GitHub `production` | Usuarios reales |
 
-En local, `infra/docker/docker-compose.yml` levanta solo Postgres,
-publicado únicamente en `127.0.0.1` (D-004). El backend se añadirá al Compose
-cuando tenga código.
+En local, `infra/docker/docker-compose.yml` levanta Postgres y la API del
+backend, publicados únicamente en `127.0.0.1` (D-004). La imagen de la API se
+construye con un Dockerfile multietapa, *builder* y *runner*, que aprovecha la
+caché de capas (D-034).
 
 ```
 cd infra/docker
-docker compose --env-file ../env/.env up -d
+docker compose --env-file ../env/.env up -d --build
 ```
 
 ### Hooks de Git (local)
@@ -138,7 +139,7 @@ ejecutan los jobs afectados (D-001).
 | `backend` | `backend/`, `ci.yml` | `ruff check`, `ruff format --check`, `pyright`, migraciones Alembic, `pytest` con informe de cobertura (sin umbral: la barrera es el gate de Sonar, D-002). Usa un servicio efímero de Postgres (`pgvector/pgvector:0.8.7-pg16-bookworm`, D-015) con health check y sin contraseña. uv instala con `--locked --no-build`: lockfile verificado y solo paquetes precompilados (D-031). |
 | `frontend` | `frontend/`, `shared/`, `ci.yml` | Lint, formato con Prettier (D-029), `next typegen` + `tsc --noEmit` (D-023), tests con cobertura (Vitest, D-019), build de Next.js con Webpack (D-022) y de Storybook. |
 | `contracts` | Modelos, API, `shared/` | Regenera JSON Schema y tipos TS y falla si difieren de lo commiteado. Se omite hasta que exista el generador. |
-| `docker` | `backend/`, `frontend/`, `infra/`, `ci.yml` | Valida el Compose, construye las imágenes en **runner ARM** (como la VM, D-006) y analiza la configuración con Trivy (HIGH/CRITICAL). |
+| `docker` | `backend/`, `frontend/`, `infra/`, `ci.yml` | Valida el Compose; construye la imagen del backend en **runner ARM** (como la VM, D-006) con la caché de capas de GitHub Actions; arranca la API con Postgres y comprueba `/health` y las migraciones (D-034); analiza la configuración con Trivy (HIGH/CRITICAL). |
 | `sonar` | Si `backend` o `frontend` pasan | SonarQube Cloud con el quality gate *Sonar way* (código nuevo: cobertura ≥ 80 %, duplicación ≤ 3 %, notas A, hotspots revisados). Si no se supera, el job falla (D-002). En `main`, el código nuevo es el de los últimos 30 días (D-013). |
 | `ci-ok` | Siempre | Un único check que resume el resultado; es el único obligatorio para hacer merge en `main` (D-033). |
 
@@ -179,3 +180,6 @@ secretos viven en el entorno `production`, que permite exigir aprobación manual
   semana, como segunda opinión junto a SonarCloud (D-032).
 - `main` solo cambia por PR con `ci-ok` en verde; no se puede borrar ni
   reescribir su historial (D-033).
+- La API se ejecuta sin root y con el sistema de ficheros de solo lectura. Solo
+  `/tmp` es escribible: está en memoria y se vacía en cada arranque, y ahí
+  escribe CrewAI (D-034, D-035).
