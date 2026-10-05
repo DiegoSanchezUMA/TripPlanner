@@ -174,18 +174,48 @@ soportan API de OpenAI).
 ## 5. Memoria y conocimiento — el punto más delicado del diseño
 
 **Hecho documentado, no una suposición**: la memoria nativa de CrewAI **no aísla por
-usuario**. El foro oficial del proyecto lo confirma explícitamente ("there is no
-isolation per user for the CrewAI memory types"); hay una propuesta abierta de
-"per-tenant memory isolation" no incorporada. Además, el almacén de memoria a largo
-plazo usa SQLite, que da errores de bloqueo con ejecuciones concurrentes — alcanzable
-con los 5 usuarios simultáneos del RNF-2.07.
+usuario**. En las versiones 0.x (memorias `short_term`, `long_term` y `entity`), el
+foro oficial del proyecto lo confirmaba explícitamente ("there is no isolation per
+user for the CrewAI memory types"), y la memoria a largo plazo usaba SQLite, que da
+errores de bloqueo con ejecuciones concurrentes, alcanzables con los 5 usuarios
+simultáneos del RNF-2.07.
 
-| Capa CrewAI | Solución adoptada | Justificación |
+**En CrewAI 1.15.23, la versión fijada (D-016), la memoria cambió.** Comprobado en
+su código fuente y en el contenedor el 2026-10-05 (D-035):
+
+- **Ya no hay tres memorias, sino una memoria unificada**, `Memory`, sobre LanceDB.
+  `Crew(memory=...)` acepta `True` o una instancia de `Memory`, `MemoryScope` o
+  `MemorySlice`. Los parámetros `short_term_memory`, `long_term_memory` y
+  `entity_memory` ya no existen.
+- **`MemoryScope` es una vista restringida a una ruta** (`root_scope`, p. ej.
+  `/user/42`). Aísla de forma **lógica**, dentro del mismo almacén y con la ruta
+  que elija la aplicación. Es un particionado por convención, no un aislamiento
+  multiinquilino garantizado. La conclusión de arriba se mantiene.
+- **Cada recuerdo guardado pasa por un LLM**, que infiere su ámbito, categorías e
+  importancia. Por defecto es `gpt-5.4-mini`, y los *embeddings* también son de
+  OpenAI por defecto. Hay que configurar `llm` y `embedder` con los proveedores del
+  proyecto (§4), o fallaría por falta de clave. Además, cada tarea gasta llamadas
+  de LLM extra a cargo de la cuota gratuita.
+- **`CREWAI_STORAGE_DIR` es una variable de entorno de todo el proceso.** El
+  backend atiende a varios usuarios a la vez en un único proceso (D-011), así que
+  cambiarla en cada ejecución sería una condición de carrera. La ruta de cada
+  ejecución se pasa de forma explícita: `Memory(storage="<ruta>")`.
+- **Cada `Crew` escribe sus salidas en un SQLite común**
+  (`latest_kickoff_task_outputs.db`, para `crewai replay`), con independencia de
+  la memoria. Se vacía en cada `kickoff` y se escribe después de cada tarea, y no
+  hay opción para desactivarlo. Con dos generaciones a la vez, una borraría las
+  salidas de la otra y competirían por el bloqueo de SQLite. Hay que neutralizarlo
+  en cada crew; queda pendiente de implementar y de verificar.
+- **En el contenedor, el único sitio escribible es `/tmp`**, en memoria, y
+  `CREWAI_STORAGE_DIR=/tmp/crewai` (D-035).
+
+| Función | Solución adoptada (CrewAI 1.15.23) | Justificación |
 |---|---|---|
-| `short_term` | Activada, **almacén efímero por ejecución** (`CREWAI_STORAGE_DIR` a directorio temporal que se destruye al terminar) | Contexto compartido dentro de una generación; nunca sobrevive para mezclarse con otro usuario (RNF-2.17, RNF-1.08) |
-| `long_term` | Activada **solo en entorno de evaluación** (`crewai train` / `crewai test`) | Único usuario = el autor, no hay problema de aislamiento. **Desactivada en producción** |
-| `entity` | **Desactivada** | La sustituye pgvector: las entidades recurrentes son hechos del usuario y ya tienen sitio en `hard_facts` |
-| `knowledge` | pgvector con hard facts del usuario, filtrado por `user_id` en SQL | Es el aislamiento que RNF-6.3 exige y que el framework no ofrece |
+| Memoria de la crew durante una generación (la antigua `short_term`) | `memory=Memory(storage=<directorio temporal propio de la ejecución>, llm=…, embedder=…)`. El directorio va en `/tmp`, en memoria, y se borra al terminar | Contexto compartido entre las tareas de una generación, que nunca sobrevive para mezclarse con otro usuario (RNF-2.17, RNF-1.08). La ruta se pasa de forma explícita, no con `CREWAI_STORAGE_DIR` |
+| Memoria persistente entre ejecuciones (la antigua `long_term`) | **Solo en el entorno de evaluación** (`crewai train` / `crewai test`), con un almacén persistente. **Nunca en producción** | El único usuario es el autor, así que no hay problema de aislamiento |
+| Entidades (la antigua `entity`) | **No se usa** | La sustituye pgvector: las entidades recurrentes son hechos del usuario y ya tienen sitio en `hard_facts` |
+| `knowledge` | pgvector con los *hard facts* del usuario, filtrados por `user_id` en SQL | Es el aislamiento que exige RNF-6.3 y que el framework no ofrece |
+| Salidas de tareas para `crewai replay` | **No se usan en producción**: hay que neutralizar el SQLite común en cada crew (pendiente de verificar al implementar) | Lo comparten todas las ejecuciones del proceso |
 
 **Regla de alcance de la capa vectorial** (la más importante de este apartado):
 **pgvector almacena quién es el usuario, no qué hay en el mundo.** Precios,
@@ -197,9 +227,10 @@ la capa vectorial.
 
 Cómo defenderlo ante tribunal: *"La memoria a largo plazo la implementa el sistema en
 PostgreSQL con pgvector y aislamiento multiinquilino por SQL, porque el almacén
-nativo del framework no ofrece particionado por usuario"* es una decisión de
-arquitectura argumentada; *"activamos las tres memorias porque el framework las
-tiene"* no lo es.
+nativo del framework no ofrece aislamiento por usuario: como mucho, vistas por ámbito
+dentro de un mismo almacén, que dependen de que la aplicación pase la ruta
+correcta"* es una decisión de arquitectura argumentada; *"activamos la memoria
+porque el framework la tiene"* no lo es.
 
 ## 6. Raspado web acotado por dominio
 
@@ -645,10 +676,12 @@ class PlanningCrew:
         return Crew(
             agents=self.agents, tasks=self.tasks,
             process=Process.sequential,              # NO hierarchical (§2)
-            memory=True,                              # SOLO short-term (§5)
-            long_term_memory=None if IS_PROD else default_ltm(),
-            entity_memory=None,                       # la sustituye pgvector
-            storage=ephemeral_storage_dir(),           # se destruye al terminar
+            # Memoria unificada de CrewAI 1.15 (§5): almacén propio de esta
+            # ejecución en /tmp (se destruye al terminar) y LLM/embedder del
+            # proyecto (§4). En evaluación, un almacén persistente. Ruta
+            # explícita: CREWAI_STORAGE_DIR es global al proceso (D-011, D-035).
+            memory=Memory(storage=self.run_storage_dir if IS_PROD else eval_storage_dir(),
+                          llm=memory_llm(), embedder=project_embedder()),
             knowledge_sources=[hard_facts_source(self.user_id)],
             cache=True, max_rpm=20, tracing=True, verbose=True)
 ```
@@ -658,8 +691,8 @@ class PlanningCrew:
 - **`crewai test`**: ejecuta n veces con juez LLM, tabla de puntuaciones por
   tarea/iteración (RNF-7.11, RNF-5.11). Uso previsto: 10 casos de validación con 2
   modelos distintos para comparar.
-- **`crewai train`**: única vía donde la memoria a largo plazo tiene sentido — el
-  único usuario es el autor. 5 iteraciones sobre el caso V01 para ajustar el nivel
+- **`crewai train`**: única vía donde la memoria persistente entre ejecuciones
+  tiene sentido — el único usuario es el autor (§5). 5 iteraciones sobre el caso V01 para ajustar el nivel
   de detalle de actividades (RNF-1.09, RNF-4.17).
 - **Langfuse**: trazado por ejecución (agente, prompt, herramienta, argumentos,
   tokens, latencia — RNF-6.8, 7.6, 7.16), métricas agregadas (aprobación en primera
@@ -685,7 +718,7 @@ Recorrer tras generar en CrewAI Studio y antes de dar el diseño por implementad
 - [ ] Solo T2, T3, T4 con `async_execution = true`.
 - [ ] Dependencias exactas: T5 ← T1,T3,T4 · T7 ← T1–T6 · T8 ← T7.
 - [ ] Ninguna `expected output` dice "un informe" o "una lista": todas enumeran campos con tipo, con `output_pydantic` asignado.
-- [ ] Proceso `sequential`; solo memoria a corto plazo activa (almacén efímero); largo plazo y entidad desactivadas en producción.
+- [ ] Proceso `sequential`; memoria de la crew con un almacén propio y efímero por ejecución (`Memory(storage=…)`, con el `llm` y el `embedder` del proyecto); sin memoria persistente en producción; el SQLite común de `crewai replay` neutralizado (§5).
 - [ ] Toda tarea que consulta un servicio externo puede devolver un `gap`; ningún dato factual sin `source`.
 - [ ] Tras exportar el ZIP: añadir Flow, guardrails, hooks, contratos Pydantic y persistencia con autoguardado (nada de esto lo genera Studio).
 - [ ] Ejecutar los 12 escenarios de validación (V01–V12) y guardar las trazas.
@@ -704,8 +737,9 @@ el apartado correspondiente de arriba.)
 - **No** ejecuta código generado por agentes: la aritmética de horarios la hace una
   herramienta determinista, no un modelo. Superficie de ataque innecesaria.
 - **No** raspa precios ni disponibilidad, nunca, ni como último recurso (§6).
-- **No** usa la memoria a largo plazo del framework en producción (§5) — solo en
-  `crewai train`/`crewai test`.
+- **No** usa memoria persistente del framework en producción (§5) — solo en
+  `crewai train`/`crewai test`. En producción, la memoria de la crew vive en un
+  almacén propio de cada ejecución que se destruye al terminar.
 
 ## 15. Divergencias con la Memoria que hay que corregir antes de entregar
 
@@ -724,6 +758,7 @@ texto propuesto está en el documento original v2, capítulo 12):
 | Cap. 3, RNF-1.04 | Temperatura baja + prompt que prohíbe inventar | Añadir el **guardrail de anclaje** como mecanismo verificable |
 | Cap. 3, RNF-6.3 | Filtrado por usuario en pgvector | Añadir que la memoria del framework **no** aísla por usuario, y cómo se resuelve (§5) |
 | Cap. 3, RNF-1.09/1.10 | Memoria a largo plazo y de entidad "en el producto" | Largo plazo **solo en evaluación**; entidad **retirada** en favor de pgvector |
+| Cap. 2/3, memoria de CrewAI | Tres memorias (`short_term`, `long_term`, `entity`), la de largo plazo en SQLite | En CrewAI 1.15 hay **una memoria unificada** sobre LanceDB, con vistas por ámbito y un LLM que analiza cada recuerdo; almacén propio por ejecución (§5, D-035) |
 | Cap. 3, RNF-5.4/5.5 | Raspado como "plan B genérico" | Acotado a datos informativos de lugares; **prohibido** en vuelos/alojamiento |
 | Cap. 3, RNF-3.7 | "Pydantic o agente formateador" | Cerrar la alternativa: **solo Pydantic** |
 | Cap. 3, secuencia de creación | Termina en consolidar y persistir | Añadir el bucle de revisión (tope 2 rondas) y la salida con advertencias |

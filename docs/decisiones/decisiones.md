@@ -1685,8 +1685,8 @@ todavía no lo importa.
   `/home` falla con "Read-only file system".
 - El `tmpfs` consume RAM de la VM, hasta 512 MB.
 - **Hallazgos sobre CrewAI 1.15.23 que afectan al diseño de §5 de
-  `arquitectura-multiagente-crewai.md`. Se dejan anotados para revisarlos
-  antes de escribir el Flow:**
+  `arquitectura-multiagente-crewai.md`.** Se incorporaron a §5, a la casilla de
+  §13, al esqueleto de §11 y a §15 el mismo día, con el visto bueno del autor:
   1. `CREWAI_STORAGE_DIR` es una variable de entorno **de todo el proceso**.
      Con un único proceso que atiende a varios usuarios a la vez (D-011),
      cambiarla en cada ejecución sería una condición de carrera. Para aislar la
