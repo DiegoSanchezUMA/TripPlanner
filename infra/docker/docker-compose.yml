@@ -52,8 +52,8 @@ services:
     ports:
       - "127.0.0.1:${API_PORT:-8000}:8000"   # solo localhost, como Postgres (D-004)
     # Sistema de ficheros de solo lectura: el único sitio escribible es /tmp,
-    # en memoria y vacío en cada arranque. Ahí escriben CrewAI y su memoria a
-    # corto plazo, que nunca debe sobrevivir a la ejecución (D-035). Cualquier
+    # en memoria y vacío en cada arranque. Ahí escriben CrewAI y la memoria de
+    # cada ejecución, que nunca debe sobrevivir a ella (D-035). Cualquier
     # escritura en otro sitio falla al momento, en local y en el CI.
     read_only: true
     tmpfs:

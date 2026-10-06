@@ -133,8 +133,11 @@ Alcance del MVP, cobertura de la interacción por chat, integridad del intercamb
 datos (validación Pydantic), **mitigación de alucinaciones** (RNF-1.04 — ver
 guardrail de anclaje en `arquitectura-multiagente-crewai.md`), manejo de cuotas
 gratuitas, inyección de contexto estricta, restricción de herramientas por agente,
-memoria corto/largo plazo/entidad (ver §5 del doc de arquitectura para el diseño
-real, distinto de esta redacción original).
+memoria corto/largo plazo/entidad (RNF-1.08 a RNF-1.10). **Esta redacción está
+desfasada por cambio de tecnología**: eran los tres tipos de memoria de CrewAI 0.x, y
+CrewAI 1.x los sustituyó por una memoria unificada. El diseño real está en §5 del doc
+de arquitectura (D-035), y la comparación con la memoria propia (ReMAP + pgvector),
+en H-26 de `plan-de-pruebas.md`.
 
 ### 2. Eficiencia de desempeño (20 RNF: RNF-2.01–2.20)
 Latencia de generación (≤120 s, objetivo 90 s), TTFT conversacional (<3 s),
