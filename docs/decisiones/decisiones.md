@@ -43,6 +43,7 @@ arquitectura multiagente viven en `docs/arquitectura-multiagente-crewai.md`.
 | D-034 | Imagen del backend: Dockerfile multietapa (builder/runner) con caché de capas, y servicio `api` en el Compose | Aceptada |
 | D-035 | Contenedor de la API de solo lectura, con `/tmp` en memoria como único sitio escribible para CrewAI | Aceptada |
 | D-036 | Knowledge y memoria de CrewAI en Qdrant, un almacén propio por ejecución, y ChromaDB solo como librería | Aceptada |
+| D-037 | *Overrides* de pnpm para las dependencias vulnerables de CopilotKit sin arreglo compatible | Aceptada |
 
 Formato de cada entrada: contexto, decisión, alternativas descartadas y
 consecuencias. Estados: **Aceptada**, **Pendiente** (decidida pero aún sin
@@ -1939,3 +1940,99 @@ todavía no lo importa.
     se separaría a un servidor y por qué no va en un contenedor propio;
   - en §11, la estructura y el esqueleto;
   - en §13, §14 y §15, las líneas correspondientes.
+
+---
+
+## D-037 · *Overrides* de pnpm para las dependencias vulnerables de CopilotKit sin arreglo compatible
+
+- **Fecha:** 2026-10-06
+- **Estado:** Aceptada
+
+**Contexto.** Dependabot tenía abiertas 17 alertas en `frontend/pnpm-lock.yaml`.
+Todas son de dependencias transitivas de CopilotKit 1.77.0, que es la última
+versión:
+
+| Paquete vulnerable | Alertas | Lo pide | Con el rango | Versión corregida |
+|---|---|---|---|---|
+| `undici` 5.29.0 | 13 (3 altas, 7 medias, 3 bajas): *smuggling*, inyección CRLF, descompresión sin límite, DoS en WebSocket… | `@ai-sdk/provider-utils` 3.0.41, a través de `@ai-sdk/google-vertex` 3 | `^5.29.0` | 6.23.0–6.28.1, según el aviso |
+| `@fastify/busboy` 2.1.1 | 2 (alta: DoS; media: CRLF) | `undici` 5 | `^2.0.0` | 3.2.2 |
+| `@graphql-tools/utils` 11.2.2 | 1 alta: *prototype pollution* en `mergeDeep` | `graphql-yoga` 5.24.x, el servidor GraphQL de `@copilotkit/runtime` | `^11.2.0` | 12.0.1 |
+| `katex` 0.16.47 | 1 baja: aprovecha una *prototype pollution* que ya exista para activar `trust` | CopilotKit, `mermaid` y `remark-math` | `^0.16.x` | 0.18.2 |
+
+- **No se puede arreglar actualizando.** Los padres, incluso en su última
+  versión, piden un rango que no llega a la versión corregida: `provider-utils`
+  3.0.41 es la última 3.x, `graphql-yoga` 5.24.2 sigue pidiendo `^11.2.0`, y nadie
+  admite KaTeX 0.17 o superior. Por eso las *security updates* de D-007 no abren
+  ningún PR: es el mismo límite que en D-036.
+- **Aquí no se pueden descartar como en D-036.** Hoy el frontend aún no importa
+  CopilotKit, pero `CopilotRuntime` va a ejecutarse en producción (Vercel), y su
+  servidor GraphQL y sus descargas sí usarán este código.
+
+**Decisión.** Tres *overrides* de pnpm en `frontend/pnpm-workspace.yaml`, donde
+pnpm 10 lee su configuración. Cada uno usa un **selector por rango de versión**:
+cualquier copia por debajo de la versión corregida se sustituye.
+
+```yaml
+overrides:
+  "undici@<6.28.1": "^6.29.0"
+  "@graphql-tools/utils@<12.0.1": "^12.0.3"
+  "katex@<0.18.2": "^0.18.2"
+```
+
+`@fastify/busboy` no necesita regla: solo lo traía `undici` 5, y `undici` 6 no
+tiene dependencias.
+
+**Por qué es seguro forzar versiones mayores.** Antes de forzar nada se comprobó
+qué usa cada padre:
+
+| Override | Qué cambia en la versión nueva | Qué usa el padre | Resultado |
+|---|---|---|---|
+| `undici` 5 → 6 | API de `Agent` y `fetch` sin cambios para este uso | `provider-utils` solo lo usa en `getDefaultDownloadFetch`: un `Agent` con `connect.lookup` (su protección anti-SSRF) y `fetch` | Compatible |
+| `utils` 11 → 12 | Cambia la firma de `collectFields`, `shouldIncludeNode`, `getDeferValues` y `collectSubFields` | `graphql-yoga` solo importa `createGraphQLError`, `getSchemaCoordinate`, `isAsyncIterable` e `isPromise`; su plugin de *defer/stream*, `GraphQLDeferDirective`, `GraphQLStreamDirective` e `inspect`. Las siete siguen exportándose en la 12.0.3 | Compatible |
+| `katex` 0.16 → 0.18 | 0.17: cambia `__defineFunction`, una API interna. 0.18: renombra clases CSS internas | Nadie usa la API interna, y el CSS de CopilotKit y `streamdown` no tiene selectores contra esas clases | Compatible |
+
+**Verificación.**
+- **Lockfile.** Ya no queda ninguna versión vulnerable: `undici` 6.29.0 y 8.11.2,
+  `@fastify/busboy` 3.2.2, `@graphql-tools/utils` 12.0.3 y `katex` 0.18.10.
+  Efectos colaterales, revisados:
+  - `commander` pasa de 8 a 15. Lo usa la línea de comandos de KaTeX.
+  - La dependencia opcional (*peer*) `undici` de `openai` pasa de la 8.11.2 a la
+    6.29.0, dentro de su rango (`>=5 <9`). `openai` solo la usa para la
+    autenticación con certificado X.509, que no usamos.
+- **Prueba de humo.** Cada paquete se cargó desde la carpeta de su padre real,
+  así que resuelve la versión que verá en producción. Las ocho comprobaciones
+  salieron bien:
+  - `provider-utils` ve `undici` 6.29.0.
+  - **La protección anti-SSRF sigue funcionando.** Una petición a `localtest.me`,
+    que resuelve a 127.0.0.1, se bloquea con `resolved to disallowed IP address`,
+    mientras que un `fetch` normal sí llega a ese servidor local.
+  - Una descarga pública responde 200.
+  - `graphql-yoga` ve `utils` 12.0.3 y responde de punta a punta a una consulta
+    con `@defer`.
+  - KaTeX 0.18.10 renderiza visto desde CopilotKit y desde `remark-math`.
+- **Herramientas del frontend.** `pnpm lint`, `format:check`, `typecheck`,
+  `test:coverage` y `build` pasan.
+
+**Alternativas descartadas.**
+- **Esperar a que CopilotKit actualice:** la 1.77.0 es la última y no hay fecha.
+- **Descartar las alertas:** sería ocultar código vulnerable que se va a usar.
+- ***Overrides* por camino** (p. ej. `"@ai-sdk/provider-utils@3>undici"`): son más
+  precisos, pero no cubren una copia vulnerable que llegue por otro paquete. El
+  selector por rango sí.
+- **`pnpm update`:** no sirve, porque los rangos de los padres no lo permiten.
+
+**Consecuencias.**
+- **Se fuerzan versiones mayores que los padres no han probado.** El riesgo de
+  rotura en ejecución se ha reducido con el análisis y la prueba de humo, pero no
+  es cero. Cuando el frontend use CopilotKit, sus propios tests lo cubrirán.
+- **`mermaid` lleva dentro una copia empaquetada de KaTeX 0.16.47.** El
+  *override* no la toca y Dependabot no la ve. Pero solo está en
+  `mermaid.esm.mjs`, la versión para cargar desde un CDN. Su `exports` apunta a
+  `mermaid.core.mjs`, que importa el paquete `katex` ya corregido, y así lo carga
+  `streamdown`.
+- **Hay que quitar cada regla cuando su padre admita la versión corregida.**
+  Dependabot no avisa de eso. Al actualizar CopilotKit, `@ai-sdk/*`,
+  `graphql-yoga` o `mermaid`, probar a quitar los *overrides*. Si el lockfile no
+  vuelve a traer versiones vulnerables, sobran.
+- **D-007 sigue valiendo, con el mismo límite que en D-036:** las alertas sin
+  arreglo compatible se tratan a mano.
