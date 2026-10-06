@@ -190,3 +190,7 @@ secretos viven en el entorno `production`, que permite exigir aprobación manual
   lo vigilan. Por ejemplo, ChromaDB (dependencia obligatoria de CrewAI) solo se
   usa como librería: Ruff prohíbe importarlo en nuestro código y un test
   comprueba que su servidor no se carga (D-036).
+- Si el código vulnerable sí se va a usar, se fuerza la versión corregida con
+  un *override*, después de comprobar que el paquete que la pide es compatible.
+  Es el caso de `undici`, `@graphql-tools/utils` y `katex` en las dependencias
+  de CopilotKit (D-037).
