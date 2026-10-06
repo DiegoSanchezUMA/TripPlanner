@@ -37,7 +37,7 @@ El porqué de cada decisión de este documento está en
 | Componente | Tecnología | Responsabilidad |
 |---|---|---|
 | Frontend | Next.js, React, TypeScript, CopilotKit | Chat conversacional y visualización del itinerario mientras se construye. Componentes documentados en Storybook. |
-| Backend (BFF) | FastAPI + CrewAI | API para el frontend y orquestación multiagente (CrewAI Flow) en un único proceso y contenedor (un solo worker de uvicorn), sin orquestador ni worker aparte (D-011). Las tareas en segundo plano (`extract_soft_facts`) y la caché de respuestas MCP viven en ese mismo proceso (D-012). Stateless: el estado del Flow se persiste en PostgreSQL; la caché es desechable. |
+| Backend (BFF) | FastAPI + CrewAI | API para el frontend y orquestación multiagente (CrewAI Flow) en un único proceso y contenedor (un solo worker de uvicorn), sin orquestador ni worker aparte (D-011). Las tareas en segundo plano (`extract_soft_facts`) y la caché de respuestas MCP viven en ese mismo proceso (D-012). El knowledge y la memoria de CrewAI van en Qdrant, con un almacén propio de cada ejecución (el knowledge en memoria; la memoria con Qdrant Edge en `/tmp`). Son librerías dentro del proceso, no un servicio (D-036). Stateless: el estado del Flow se persiste en PostgreSQL; la caché es desechable. |
 | Base de datos | PostgreSQL 16 + pgvector | Datos relacionales y vectoriales en el mismo motor. Esquema en `docs/data-model/modelo-datos.md`. También guarda los contadores de cuota por usuario. Sin Redis: la caché de respuestas MCP va en memoria del backend; Redis queda como evolución futura (D-012). |
 | Reverse proxy | Caddy | Solo en producción: termina HTTPS y expone el backend. |
 | Observabilidad | Langfuse | Trazas de las llamadas a LLM y datasets de evaluación. |
@@ -139,7 +139,7 @@ ejecutan los jobs afectados (D-001).
 | `backend` | `backend/`, `ci.yml` | `ruff check`, `ruff format --check`, `pyright`, migraciones Alembic, `pytest` con informe de cobertura (sin umbral: la barrera es el gate de Sonar, D-002). Usa un servicio efímero de Postgres (`pgvector/pgvector:0.8.7-pg16-bookworm`, D-015) con health check y sin contraseña. uv instala con `--locked --no-build`: lockfile verificado y solo paquetes precompilados (D-031). |
 | `frontend` | `frontend/`, `shared/`, `ci.yml` | Lint, formato con Prettier (D-029), `next typegen` + `tsc --noEmit` (D-023), tests con cobertura (Vitest, D-019), build de Next.js con Webpack (D-022) y de Storybook. |
 | `contracts` | Modelos, API, `shared/` | Regenera JSON Schema y tipos TS y falla si difieren de lo commiteado. Se omite hasta que exista el generador. |
-| `docker` | `backend/`, `frontend/`, `infra/`, `ci.yml` | Valida el Compose; construye la imagen del backend en **runner ARM** (como la VM, D-006) con la caché de capas de GitHub Actions; arranca la API con Postgres y comprueba `/health` y las migraciones (D-034); analiza la configuración con Trivy (HIGH/CRITICAL). |
+| `docker` | `backend/`, `frontend/`, `infra/`, `ci.yml` | Valida el Compose; construye la imagen del backend en **runner ARM** (como la VM, D-006) con la caché de capas de GitHub Actions; arranca la API con Postgres y comprueba `/health` y las migraciones (D-034), y que CrewAI y los almacenes Qdrant del knowledge y la memoria funcionan con el disco de solo lectura (D-035, D-036); analiza la configuración con Trivy (HIGH/CRITICAL). |
 | `sonar` | Si `backend` o `frontend` pasan | SonarQube Cloud con el quality gate *Sonar way* (código nuevo: cobertura ≥ 80 %, duplicación ≤ 3 %, notas A, hotspots revisados). Si no se supera, el job falla (D-002). En `main`, el código nuevo es el de los últimos 30 días (D-013). |
 | `ci-ok` | Siempre | Un único check que resume el resultado; es el único obligatorio para hacer merge en `main` (D-033). |
 
@@ -183,3 +183,10 @@ secretos viven en el entorno `production`, que permite exigir aprobación manual
 - La API se ejecuta sin root y con el sistema de ficheros de solo lectura. Solo
   `/tmp` es escribible: está en memoria y se vacía en cada arranque, y ahí
   escribe CrewAI (D-034, D-035).
+- El knowledge y la memoria de cada ejecución van en su propio almacén Qdrant:
+  lo de un usuario nunca llega a la crew ni al Flow de otro (RNF-6.3, D-036).
+- Las alertas de Dependabot sin arreglo compatible se analizan una a una. Si el
+  código vulnerable no se usa, se descartan con justificación y con barreras que
+  lo vigilan. Por ejemplo, ChromaDB (dependencia obligatoria de CrewAI) solo se
+  usa como librería: Ruff prohíbe importarlo en nuestro código y un test
+  comprueba que su servidor no se carga (D-036).
