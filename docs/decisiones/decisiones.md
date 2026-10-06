@@ -1836,7 +1836,10 @@ todavía no lo importa.
      recuerdo en un `RunMemoryStorage`.
 
 6. **Las cuatro alertas se descartan** en GitHub con el motivo *Vulnerable code is
-   not actually used* y un enlace a esta decisión. Se pueden reabrir.
+   not actually used* y un enlace a esta decisión. Se pueden reabrir. No se
+   cierran solas: ChromaDB sigue en el lockfile porque CrewAI lo exige, y
+   Dependabot las mantiene abiertas hasta que se descartan o hasta que una
+   versión de CrewAI deja de usar ChromaDB o permite una versión corregida.
 
 **Alternativas descartadas.**
 - **Actualizar o quitar `chromadb`:** no existe versión corregida, CrewAI no deja
@@ -1920,6 +1923,12 @@ todavía no lo importa.
   - ChromaDB publica un arreglo;
   - aparece `sentence-transformers` en el lock;
   - el backend pasa a tener varios procesos (D-011).
-- **Afecta a `arquitectura-multiagente-crewai.md`:** las filas de memoria y
-  `knowledge` de la tabla de §5, y la estructura y el esqueleto de §11.
-  Pendiente del visto bueno del autor.
+- **Incorporada a `arquitectura-multiagente-crewai.md`** con el visto bueno del
+  autor (2026-10-06). Se cambiaron:
+  - en §5, los hallazgos, las filas de memoria y knowledge y una fila nueva para
+    la memoria de cada `Flow`;
+  - una subsección nueva, §5.1, con el aviso de seguridad, por qué no se podía
+    cambiar de versión, las ventajas de seguridad y de despliegue con Docker, cómo
+    se separaría a un servidor y por qué no va en un contenedor propio;
+  - en §11, la estructura y el esqueleto;
+  - en §13, §14 y §15, las líneas correspondientes.

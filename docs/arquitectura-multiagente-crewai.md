@@ -183,8 +183,8 @@ simultáneos del RNF-2.07.
 **En CrewAI 1.15.23, la versión fijada (D-016), la memoria cambió.** Comprobado en
 su código fuente y en el contenedor el 2026-10-05 (D-035):
 
-- **Ya no hay tres memorias, sino una memoria unificada**, `Memory`, sobre LanceDB.
-  `Crew(memory=...)` acepta `True` o una instancia de `Memory`, `MemoryScope` o
+- **Ya no hay tres memorias, sino una memoria unificada**, `Memory`, que guarda
+  por defecto en LanceDB y también admite Qdrant Edge. `Crew(memory=...)` acepta `True` o una instancia de `Memory`, `MemoryScope` o
   `MemorySlice`. Los parámetros `short_term_memory`, `long_term_memory` y
   `entity_memory` ya no existen.
 - **`MemoryScope` es una vista restringida a una ruta** (`root_scope`, p. ej.
@@ -198,8 +198,9 @@ su código fuente y en el contenedor el 2026-10-05 (D-035):
   de LLM extra a cargo de la cuota gratuita.
 - **`CREWAI_STORAGE_DIR` es una variable de entorno de todo el proceso.** El
   backend atiende a varios usuarios a la vez en un único proceso (D-011), así que
-  cambiarla en cada ejecución sería una condición de carrera. La ruta de cada
-  ejecución se pasa de forma explícita: `Memory(storage="<ruta>")`.
+  cambiarla en cada ejecución sería una condición de carrera. Por eso el
+  aislamiento no se apoya en ella: cada ejecución recibe su propio almacén Qdrant
+  (§5.1, D-036).
 - **Cada `Crew` escribe sus salidas en un SQLite común**
   (`latest_kickoff_task_outputs.db`, para `crewai replay`), con independencia de
   la memoria. Se vacía en cada `kickoff` y se escribe después de cada tarea, y no
@@ -208,13 +209,21 @@ su código fuente y en el contenedor el 2026-10-05 (D-035):
   en cada crew; queda pendiente de implementar y de verificar.
 - **En el contenedor, el único sitio escribible es `/tmp`**, en memoria, y
   `CREWAI_STORAGE_DIR=/tmp/crewai` (D-035).
+- **El `knowledge` de serie y la memoria de cada `Flow` tampoco aíslan**
+  (comprobado el 2026-10-06, D-036):
+  - `Crew(knowledge_sources=...)` copia los hechos a un ChromaDB común a todo el
+    proceso, en la colección `knowledge_crew`. En una prueba con dos usuarios, **la
+    crew de B recuperó la alergia de A**.
+  - Todo `Flow` crea además su propia `Memory(root_scope="/flow/<nombre>")`, en el
+    LanceDB común y con el mismo ámbito para todos los usuarios.
 
 | Función | Solución adoptada (CrewAI 1.15.23) | Justificación |
 |---|---|---|
-| Memoria de la crew durante una generación (la antigua `short_term`) | `memory=Memory(storage=<directorio temporal propio de la ejecución>, llm=…, embedder=…)`. El directorio va en `/tmp`, en memoria, y se borra al terminar | Contexto compartido entre las tareas de una generación, que nunca sobrevive para mezclarse con otro usuario (RNF-2.17, RNF-1.08). La ruta se pasa de forma explícita, no con `CREWAI_STORAGE_DIR` |
-| Memoria persistente entre ejecuciones (la antigua `long_term`) | **Solo en el entorno de evaluación** (`crewai train` / `crewai test`), con un almacén persistente. **Nunca en producción** | El único usuario es el autor, así que no hay problema de aislamiento |
+| Memoria de la crew durante una generación (la antigua `short_term`) | `memory=Memory(llm=…, embedder=…)`, **sin `storage`**. La fábrica instalada al importar `app.agents` le da un `RunMemoryStorage`: un **Qdrant Edge** en un directorio temporal propio de la ejecución, en `/tmp` (en memoria), que se borra al terminar (§5.1) | Contexto compartido entre las tareas de una generación, que nunca sobrevive para mezclarse con otro usuario (RNF-2.17, RNF-1.08). El aislamiento no depende de pasar bien una ruta |
+| Memoria persistente entre ejecuciones (la antigua `long_term`) | **Solo en el entorno de evaluación** (`crewai train` / `crewai test`), con un almacén persistente pasado como instancia (`QdrantEdgeStorage(path=…)`). **Nunca en producción**: `Memory(storage="<ruta>")` se rechaza | El único usuario es el autor, así que no hay problema de aislamiento |
+| Memoria automática de cada `Flow` | Almacén propio de cada instancia del Flow (`RunMemoryStorage`, con la misma fábrica). Si el Flow no la usa, `_skip_auto_memory = True` evita crearla | Sin esto, todo Flow usaría el LanceDB común, con el mismo ámbito para todos los usuarios |
 | Entidades (la antigua `entity`) | **No se usa** | La sustituye pgvector: las entidades recurrentes son hechos del usuario y ya tienen sitio en `hard_facts` |
-| `knowledge` | pgvector con los *hard facts* del usuario, filtrados por `user_id` en SQL | Es el aislamiento que exige RNF-6.3 y que el framework no ofrece |
+| `knowledge` | Los *hard facts* del usuario se leen de pgvector, filtrados por `user_id` en SQL, y se pasan como `knowledge_sources`. CrewAI los indexa en un `RunKnowledgeStorage`: un **Qdrant en memoria** propio de la ejecución (§5.1) | pgvector es la fuente de verdad y aísla por SQL (RNF-6.3). El índice que consulta CrewAI se crea y se destruye con cada ejecución; el de serie, un ChromaDB común, mezclaba usuarios |
 | Salidas de tareas para `crewai replay` | **No se usan en producción**: hay que neutralizar el SQLite común en cada crew (pendiente de verificar al implementar) | Lo comparten todas las ejecuciones del proceso |
 
 **Regla de alcance de la capa vectorial** (la más importante de este apartado):
@@ -231,6 +240,134 @@ nativo del framework no ofrece aislamiento por usuario: como mucho, vistas por �
 dentro de un mismo almacén, que dependen de que la aplicación pase la ruta
 correcta"* es una decisión de arquitectura argumentada; *"activamos la memoria
 porque el framework la tiene"* no lo es.
+
+### 5.1 Por qué Qdrant para el knowledge y la memoria (D-036)
+
+**El aviso de seguridad.** El 2026-10-05, Dependabot avisó de cuatro
+vulnerabilidades en `chromadb`, la base de datos vectorial que CrewAI instala por
+su cuenta (versión 1.1.1 en `backend/uv.lock`). Las dos críticas:
+
+| Aviso | Versiones afectadas | Versión corregida |
+|---|---|---|
+| *ChromaDB Python project has a pre-authentication code injection vulnerability* (GHSA-f4j7-r4q5-qw2c, CVE-2026-45829, crítica, CVSS 10) | ≥ 1.0.0, ≤ 1.5.9 | Ninguna |
+| *ChromaDB has a code injection vulnerability* (GHSA-36p7-vc44-83pf, CVE-2026-45833, crítica) | ≥ 0.4.17, ≤ 1.5.9 | Ninguna |
+
+> A pre-authentication, code injection vulnerability in version 1.0.0 or later of
+> the ChromaDB Python project allows an unauthenticated attacker to run arbitrary
+> code on the server by sending a malicious model repository and
+> `trust_remote_code` set to true in the
+> `/api/v2/tenants/{tenant}/databases/{db}/collections` endpoint.
+>
+> A code injection vulnerability in version 0.4.17 or later of the ChromaDB Python
+> project allows an authenticated attacker to run arbitrary code on the server by
+> sending a malicious model repository and `trust_remote_code` set to true in the
+> `/api/v2/tenants/default_tenant/databases/default_database/collections/{collection_id}`
+> if they have the `UPDATE_COLLECTION` permission.
+
+Las otras dos, de gravedad alta, permiten saltarse el aislamiento entre *tenants*
+del servidor de ChromaDB (GHSA-2wm9-hf6c-p5cr y GHSA-xph7-9rjv-w5fr).
+
+**Por qué no se podía cambiar de versión.**
+- **No existe versión corregida**: están afectadas todas hasta la 1.5.9.
+- **CrewAI 1.15.23 exige `chromadb~=1.1.0`**, es decir, ≥ 1.1.0 y < 1.2. Aunque
+  saliera un parche en la 1.6, no se podría instalar hasta que CrewAI lo
+  permitiera.
+- **Tampoco se puede desinstalar**: CrewAI carga 58 módulos de `chromadb` al
+  importarse, y sus *embedders* de Google y Azure son clases de ChromaDB.
+
+**¿Nos afectaba?** No directamente. Los cuatro avisos están en el **servidor HTTP**
+de ChromaDB, que nunca arrancamos, y la ejecución de código necesita
+`sentence-transformers`, que no está instalado. Pero al comprobarlo apareció un
+problema peor, de diseño: el knowledge y la memoria de serie mezclaban usuarios
+(ver arriba).
+
+**Las alertas no desaparecen solas.** ChromaDB sigue instalado porque CrewAI lo
+exige: lo que cambia es que ya no se usa. Mientras `chromadb` 1.1.1 esté en el
+lockfile, Dependabot mantiene las alertas abiertas. Desaparecen en dos casos:
+- se descartan a mano, con el motivo *Vulnerable code is not actually used* y un
+  enlace a D-036;
+- una versión futura de CrewAI deja de usar ChromaDB o permite una versión
+  corregida, y se actualiza. En ese caso se cierran solas como "arregladas".
+
+**La decisión: Qdrant, con un almacén propio por ejecución.**
+
+| | Knowledge | Memoria |
+|---|---|---|
+| Clase | `RunKnowledgeStorage` (`app/agents/knowledge/`) | `RunMemoryStorage` (`app/agents/memory/`) |
+| Motor | Qdrant en memoria (`qdrant-client`, `location=":memory:"`) | Qdrant Edge, el motor embebido de Qdrant (`qdrant-edge-py`), en un directorio propio de `/tmp` |
+| Por qué ese | Es el adaptador de knowledge de CrewAI para Qdrant | Es el único almacén de memoria de CrewAI basado en Qdrant |
+| Vida | Se crea con la crew y desaparece con ella | Se crea con la crew o el Flow, y su directorio se borra al terminar |
+| Fallos de CrewAI que corrige | Colección de 384 dimensiones fijas; vía async que devolvía `[]` sin avisar; errores tragados | Pérdida de guardados con varios hilos (20 de 100 en la prueba); directorio que nunca se borraba |
+
+- **Funcionan solos.** Los dos se instalan con las fábricas de CrewAI al importar
+  `app.agents`. Así, todo `Knowledge` y toda `Memory` sin almacenamiento explícito
+  reciben uno nuevo, también los que CrewAI crea por su cuenta.
+- **Dependabot no ve vulnerabilidades en los paquetes nuevos.** La revisión de
+  dependencias del PR, que usa la misma base de datos, da 0 tanto en
+  `qdrant-client` 1.14.3 como en `qdrant-edge-py` 0.8.0.
+
+**Ventajas en seguridad.**
+1. **Aislamiento por construcción.** Cada ejecución tiene su propio almacén, así
+   que no hay ningún filtro por usuario que se pueda olvidar. Un error de
+   programación no puede mezclar los datos de dos usuarios (RNF-6.3).
+2. **Sin superficie de red.** Qdrant va dentro del proceso del backend, sin puerto
+   ni API. Los avisos que afectan a servidores no tienen por dónde entrar: los
+   cuatro de ChromaDB y los dos del servidor Qdrant (GHSA-f632-vm87-2m2f y
+   GHSA-xcr2-h8hv-6227).
+3. **Datos efímeros y en RAM.** En el contenedor, `/tmp` está en memoria (D-035).
+   Al terminar la ejecución no queda en disco nada que pueda filtrarse, copiarse
+   en una copia de seguridad o tener que borrarse por el RGPD. La única copia
+   persistente de los datos del usuario sigue en PostgreSQL.
+4. **ChromaDB, inactivo y vigilado.** Sigue instalado porque CrewAI lo exige,
+   pero:
+   - Ruff prohíbe importarlo en nuestro código;
+   - un test comprueba que su servidor no se carga nunca y que no está instalado
+     lo que necesita la ejecución remota de código.
+5. **Los fallos se ven.** El almacén del knowledge ya no devuelve una lista vacía
+   ante un error. Antes, una alergia podía desaparecer sin ningún aviso.
+
+**Ventajas para Docker, el escalado y producción.**
+- **Ya va dentro de Docker.** Qdrant vive en el contenedor `api`, sin ningún
+  servicio más. La imagen es la misma en local, en el CI (ARM64, como la VM) y en
+  producción, y el CI prueba los dos almacenes dentro del contenedor de solo
+  lectura.
+- **El backend sigue siendo *stateless*.** Cada ejecución lleva su propio almacén
+  y lo persistente está en PostgreSQL. Para escalar basta con añadir réplicas del
+  contenedor `api`, sin coordinar estado entre ellas. Hoy hay un único proceso
+  (D-011).
+- **Sin coste fijo.** No reserva RAM de la VM (12 GB, Always Free) para un
+  servidor: solo usa memoria mientras hay ejecuciones en marcha.
+- **Se puede separar.** Qdrant es el mismo motor embebido, como servidor (imagen
+  `qdrant/qdrant`) o en clúster. Si algún día hiciera falta un almacén compartido,
+  por ejemplo varias réplicas que compartan memoria entre sesiones:
+  - el knowledge solo cambia `location=":memory:"` por `url=…` (el adaptador de
+    CrewAI ya lo admite), y se añade el servicio al Compose;
+  - la memoria necesitaría un almacenamiento propio, porque CrewAI 1.15.23 solo la
+    soporta embebida (Qdrant Edge o LanceDB).
+
+**Por qué no un contenedor de Qdrant ya.** Los tutoriales lo ponen en su propio
+contenedor porque lo usan como base de datos vectorial principal y persistente.
+Aquí ese papel lo hace pgvector, y Qdrant es solo un índice temporal de cada
+ejecución. Un servidor traería varios inconvenientes:
+- un servicio más, con su puerto y sus propios avisos de seguridad;
+- datos del usuario guardados fuera de PostgreSQL;
+- el aislamiento pasaría a ser lógico, con colecciones compartidas por nombre;
+- y para la memoria, CrewAI ni siquiera tiene adaptador.
+
+**Costes.**
+- Cada ejecución vuelve a calcular los *embeddings* de los hechos del usuario al
+  crear la crew.
+- Las operaciones de cada almacén se hacen de una en una.
+- Las dos clases dependen de detalles internos de CrewAI; si una versión nueva
+  los cambia, sus tests lo detectan.
+
+Cómo defenderlo ante tribunal: *"El framework guarda el knowledge y la memoria en
+un almacén común a todos los usuarios, y su base de datos por defecto tiene
+avisos críticos sin parche que no podemos actualizar. Le damos a cada ejecución
+su propio Qdrant, embebido, en memoria y efímero: el aislamiento no depende de
+que el código aplique bien un filtro, no hay ningún servidor vectorial expuesto,
+y si hiciera falta crecer, el mismo motor se puede sacar a su propio
+contenedor."*
 
 ## 6. Raspado web acotado por dominio
 
@@ -534,6 +671,11 @@ relacional, no embebido local).
 
 ```
 backend/app/agents/
+├── __init__.py                     # instala los almacenes Qdrant por ejecución (§5.1)
+├── knowledge/
+│   └── run_storage.py              # RunKnowledgeStorage: Qdrant en memoria
+├── memory/
+│   └── run_storage.py              # RunMemoryStorage: Qdrant Edge en /tmp
 ├── flows/
 │   └── travel_planner_flow.py     # @start, @router, @listen  ← no lo genera Studio
 ├── crews/
@@ -676,13 +818,15 @@ class PlanningCrew:
         return Crew(
             agents=self.agents, tasks=self.tasks,
             process=Process.sequential,              # NO hierarchical (§2)
-            # Memoria unificada de CrewAI 1.15 (§5): almacén propio de esta
-            # ejecución en /tmp (se destruye al terminar) y LLM/embedder del
-            # proyecto (§4). En evaluación, un almacén persistente. Ruta
-            # explícita: CREWAI_STORAGE_DIR es global al proceso (D-011, D-035).
-            memory=Memory(storage=self.run_storage_dir if IS_PROD else eval_storage_dir(),
-                          llm=memory_llm(), embedder=project_embedder()),
-            knowledge_sources=[hard_facts_source(self.user_id)],
+            # Memoria unificada y knowledge (§5, §5.1): sin storage, la fábrica
+            # instalada al importar app.agents les da un almacén Qdrant propio
+            # de esta ejecución, que se destruye al terminar. LLM y embedder del
+            # proyecto (§4). En evaluación, memoria persistente como instancia.
+            memory=Memory(llm=memory_llm(), embedder=project_embedder()) if IS_PROD
+                   else Memory(storage=QdrantEdgeStorage(path=eval_storage_dir()),
+                               llm=memory_llm(), embedder=project_embedder()),
+            embedder=project_embedder(),         # lo usa el knowledge (§5.1)
+            knowledge_sources=[hard_facts_source(self.user_id)],  # leídos de pgvector
             cache=True, max_rpm=20, tracing=True, verbose=True)
 ```
 
@@ -718,7 +862,7 @@ Recorrer tras generar en CrewAI Studio y antes de dar el diseño por implementad
 - [ ] Solo T2, T3, T4 con `async_execution = true`.
 - [ ] Dependencias exactas: T5 ← T1,T3,T4 · T7 ← T1–T6 · T8 ← T7.
 - [ ] Ninguna `expected output` dice "un informe" o "una lista": todas enumeran campos con tipo, con `output_pydantic` asignado.
-- [ ] Proceso `sequential`; memoria de la crew con un almacén propio y efímero por ejecución (`Memory(storage=…)`, con el `llm` y el `embedder` del proyecto); sin memoria persistente en producción; el SQLite común de `crewai replay` neutralizado (§5).
+- [ ] Proceso `sequential`; memoria y knowledge de la crew en un almacén Qdrant propio y efímero por ejecución (lo da la fábrica al importar `app.agents`, §5.1), con el `llm` y el `embedder` del proyecto (también `embedder=` en la `Crew`, que lo usa el knowledge); sin memoria persistente en producción; el SQLite común de `crewai replay` neutralizado (§5).
 - [ ] Toda tarea que consulta un servicio externo puede devolver un `gap`; ningún dato factual sin `source`.
 - [ ] Tras exportar el ZIP: añadir Flow, guardrails, hooks, contratos Pydantic y persistencia con autoguardado (nada de esto lo genera Studio).
 - [ ] Ejecutar los 12 escenarios de validación (V01–V12) y guardar las trazas.
@@ -738,8 +882,11 @@ el apartado correspondiente de arriba.)
   herramienta determinista, no un modelo. Superficie de ataque innecesaria.
 - **No** raspa precios ni disponibilidad, nunca, ni como último recurso (§6).
 - **No** usa memoria persistente del framework en producción (§5) — solo en
-  `crewai train`/`crewai test`. En producción, la memoria de la crew vive en un
-  almacén propio de cada ejecución que se destruye al terminar.
+  `crewai train`/`crewai test`. En producción, la memoria y el knowledge de la
+  crew viven en un almacén Qdrant propio de cada ejecución que se destruye al
+  terminar (§5.1).
+- **No** expone ningún servidor vectorial ni usa ChromaDB, aunque CrewAI lo
+  instale: Qdrant va embebido en el backend (§5.1, D-036).
 
 ## 15. Divergencias con la Memoria que hay que corregir antes de entregar
 
@@ -756,9 +903,9 @@ texto propuesto está en el documento original v2, capítulo 12):
 | Cap. 2, Coordinación | "Topología estrictamente jerárquica" | Conceptualmente jerárquica, **implementada con proceso secuencial + async** |
 | Cap. 2, Agente crítico | Mezcla juez, hooks y guardrails | Tres mecanismos distintos: juez con rúbrica (tarea), guardrails (tareas), hooks (crew) |
 | Cap. 3, RNF-1.04 | Temperatura baja + prompt que prohíbe inventar | Añadir el **guardrail de anclaje** como mecanismo verificable |
-| Cap. 3, RNF-6.3 | Filtrado por usuario en pgvector | Añadir que la memoria del framework **no** aísla por usuario, y cómo se resuelve (§5) |
+| Cap. 3, RNF-6.3 | Filtrado por usuario en pgvector | Añadir que la memoria y el knowledge del framework **no** aíslan por usuario, y cómo se resuelve: un almacén Qdrant propio por ejecución (§5, §5.1) |
 | Cap. 3, RNF-1.09/1.10 | Memoria a largo plazo y de entidad "en el producto" | Largo plazo **solo en evaluación**; entidad **retirada** en favor de pgvector |
-| Cap. 2/3, memoria de CrewAI | Tres memorias (`short_term`, `long_term`, `entity`), la de largo plazo en SQLite | En CrewAI 1.15 hay **una memoria unificada** sobre LanceDB, con vistas por ámbito y un LLM que analiza cada recuerdo; almacén propio por ejecución (§5, D-035) |
+| Cap. 2/3, memoria de CrewAI | Tres memorias (`short_term`, `long_term`, `entity`), la de largo plazo en SQLite | En CrewAI 1.15 hay **una memoria unificada**, con vistas por ámbito y un LLM que analiza cada recuerdo. Memoria y knowledge van en un Qdrant propio por ejecución (§5.1, D-035, D-036) |
 | Cap. 3, RNF-5.4/5.5 | Raspado como "plan B genérico" | Acotado a datos informativos de lugares; **prohibido** en vuelos/alojamiento |
 | Cap. 3, RNF-3.7 | "Pydantic o agente formateador" | Cerrar la alternativa: **solo Pydantic** |
 | Cap. 3, secuencia de creación | Termina en consolidar y persistir | Añadir el bucle de revisión (tope 2 rondas) y la salida con advertencias |
