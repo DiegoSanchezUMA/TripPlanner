@@ -1671,7 +1671,8 @@ todavía no lo importa.
 **Alternativas descartadas.**
 - **Crear `/home/app` en la imagen, escribible por `app`:** funciona, pero lo
   escrito quedaría en la capa del contenedor y sobreviviría a los reinicios.
-  Para la memoria a corto plazo, eso contradice que sea efímera
+  Para la memoria de cada ejecución (la antigua "memoria a corto plazo", un
+  término desfasado desde CrewAI 1.x), eso contradice que sea efímera
   (`arquitectura-multiagente-crewai.md` §5).
 - **Un volumen para los datos de CrewAI:** sería persistente, justo lo que no
   se quiere. El estado que importa ya está en PostgreSQL.

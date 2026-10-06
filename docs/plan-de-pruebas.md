@@ -12,6 +12,11 @@
 > prueba** · **44 hipótesis** no deterministas · 8 casos CPDN (multi-dispositivo) ·
 > 0 requisitos sin cubrir. Plantilla inspirada en MADEJA (Junta de Andalucía),
 > ampliada con ISO/IEC/IEEE 29119-3 y SQuaRE (ISO/IEC 25010, 25023, 25040).
+>
+> **Divergencia con los documentos fuente (2026-10-05):** H-25 y H-26 se han
+> revisado aquí porque nombran tipos de memoria de CrewAI 0.x que ya no existen
+> (ver [«Memoria: terminología desfasada y comparativa»](#memoria-terminología-desfasada-y-comparativa-h-26)).
+> El Excel y los dos `.docx` conservan todavía la redacción original.
 
 ## Filosofía: dos tipos de prueba
 
@@ -20,7 +25,7 @@
 | Qué prueban | Reglas, contratos, seguridad, persistencia, interfaz | Comprensión del LLM, composición, respeto de restricciones, juicio del revisor |
 | Repeticiones | 1 ejecución basta | n casos × **3 repeticiones**, n calculado de antemano |
 | Oráculo | Resultado esperado exacto | Guardrail determinista siempre que se pueda; juez LLM solo para criterio |
-| Coste en tokens | Cero (LLM simulado — RNF-7.10) | Presupuestado: ≈ 2,9 millones de tokens en total |
+| Coste en tokens | Cero (LLM simulado — RNF-7.10) | Presupuestado: ≈ 2,9 millones de tokens en total (≈ 3,05 millones con la H-26 redefinida) |
 | Resultado | Superado / no superado | Tasa con IC 95%, pass³, comparación con umbral |
 
 Las pruebas son **hipotéticas**: descritas en prosa (entrada, pasos, resultado
@@ -132,9 +137,13 @@ Detalle completo (variable, muestra, oráculo, criterio, requisitos) en la hoja
 - **Refinamiento conversacional** — H-21 (cambio de hotel sin efectos colaterales,
   60/60), H-22 (cambio de vuelo con impacto en cascada, 0 conflictos), H-23 (CRUD
   por chat ≥95% exactas), H-24 (contexto visual/deíctico, 60/60).
-- **Memoria** — H-25 (memoria a corto plazo ≥90%), H-26 (memoria de entidad ≥85%),
-  H-27 (extracción de preferencias implícitas, P≥0,85/R≥0,75), H-28 (clasificación
-  de criticidad hard/soft, 0 críticas mal clasificadas).
+- **Memoria** — H-25 (referencias a turnos anteriores de la misma sesión ≥90%; su
+  componente original, la *short-term memory* de CrewAI, está **desfasado**), H-26
+  (**redefinida**: la original, «memoria de entidad ≥85%», está **desfasada por
+  cambio de tecnología**; ahora compara ReMAP + pgvector con la memoria unificada de
+  CrewAI, ver más abajo), H-27 (extracción de preferencias implícitas,
+  P≥0,85/R≥0,75), H-28 (clasificación de criticidad hard/soft, 0 críticas mal
+  clasificadas).
 - **Seguridad** — H-29 (emergencias médicas: redirige, no diagnostica, 75/75), H-30
   (resistencia a prompt injection: 0/30 ataques conocidos, ≤5% evasivos), H-31 (0
   PII sin redactar llega al LLM).
@@ -146,9 +155,130 @@ Detalle completo (variable, muestra, oráculo, criterio, requisitos) en la hoja
   (p95 generación ≤120 s), H-44 (p95 TTFT chat <3 s).
 - **Comparativas A/B** — H-37 (reflexión mejora calidad), H-38 (planning previo
   mejora aprobación en 1ª ronda), H-39 (temperatura baja reduce variabilidad), H-40
-  (cambio de proveedor LLM mantiene ≥10/11 escenarios).
+  (cambio de proveedor LLM mantiene ≥10/11 escenarios). H-26 también es una
+  comparativa (memoria propia frente a la de CrewAI).
 - **Procedencia** — H-41 (datos scraped/estimados bien etiquetados, 0 mal
   etiquetados).
+
+## Memoria: terminología desfasada y comparativa (H-26)
+
+### Desfasado por cambio de tecnología
+
+Los documentos fuente se escribieron sobre CrewAI 0.x, que tenía tres memorias: a
+corto plazo (`short_term`), a largo plazo (`long_term`) y de entidad (`entity`),
+además de una externa. **CrewAI 1.x las sustituyó por una memoria unificada**
+(`Memory`, sobre LanceDB). En la versión fijada (1.15.23, D-016) esos tipos y sus
+parámetros ya no existen (D-035; `arquitectura-multiagente-crewai.md` §5). Por eso
+queda desfasado todo lo que se apoya en ellos:
+
+| Dónde | Qué dice | Situación |
+|---|---|---|
+| RNF-1.08, RNF-2.17 | Memoria a corto plazo | **Desfasado el componente.** El contexto de la sesión lo dan la ventana de `chat_messages` (RNF-2.06) y el estado del Flow (§10 de la arquitectura) |
+| RNF-1.09 | Memoria a largo plazo | **Desfasado.** Lo que se recuerda del usuario entre viajes va en pgvector (ReMAP). La memoria persistente de CrewAI queda solo para evaluación (§5) |
+| RNF-1.10 | Memoria de entidad | **Desfasado.** Las personas, cadenas o aerolíneas del usuario son hechos de ReMAP en pgvector |
+| H-25 | Componente *Short-term memory* | **Desfasado el componente**; la hipótesis se mantiene (ver abajo) |
+| H-26 | «Memoria de entidad ≥ 85 %», componente *Entity memory* | **Desfasada**; se redefine como comparativa (ver abajo) |
+| CP-05.01-03 | «Memoria de entidad» | **Desfasado el nombre**; prueba lo mismo que H-26 |
+
+También están desfasados los RF de la numeración antigua de `Requisitos.docx` que
+nombran esas memorias (RF-02.25 a RF-02.27, y la memoria a corto plazo, de entidad
+y a largo plazo del módulo 5). "Largo plazo" como idea general **no** lo está: la
+consolidación de ReMAP (CU-05.02) o la memoria a largo plazo del estado del arte
+siguen valiendo, porque no se refieren a los tipos de CrewAI.
+
+**H-25 se mantiene.** Cada mensaje del chat es una ejecución distinta del Flow, y la
+memoria de CrewAI de una ejecución no sobrevive a la siguiente (§5). Las referencias
+a turnos anteriores ("el segundo", "ese hotel") las resuelven la ventana de
+`chat_messages` y el estado del Flow. Solo cambia la etiqueta del componente.
+
+### H-26 redefinida: ¿qué recuerda mejor al usuario?
+
+**Pregunta:** con los mismos datos, ¿es más eficaz la capa propia (ReMAP + pgvector)
+o la memoria de CrewAI activada? Se mide la eficacia, pero también el aislamiento,
+el coste y la latencia: una memoria que recuerda algo más pero mezcla usuarios o
+agota la cuota gratuita no sirve.
+
+| | A — ReMAP + pgvector | B — Memoria de CrewAI activada |
+|---|---|---|
+| Al guardar | ReMAP extrae los hechos, los clasifica (*hard*/*soft*) y los guarda en `hard_facts`/`soft_facts` con su `user_id` | La crew extrae recuerdos de cada tarea y los guarda sola. Un LLM infiere ámbito, categorías e importancia, y consolida con lo que ya hay |
+| Al recuperar | Top-K por similitud, filtrado por `user_id` en SQL, inyectado como contexto | `recall` automático antes de cada tarea, con `root_scope=/user/{id}`, `source=user:{id}` y `private=True` |
+| Aislamiento | Físico: la consulta SQL solo ve las filas del usuario | Lógico: ámbito y `source` dentro del mismo almacén |
+| Almacén | PostgreSQL + pgvector | LanceDB persistente (entorno de evaluación) |
+| Crews | `memory=False` | `memory=Memory(...)` con el ámbito del usuario |
+
+**Lo que no cambia entre A y B:**
+- El modelo y su versión, la temperatura, los prompts y las respuestas MCP grabadas.
+- El mismo modelo de *embeddings* y el mismo historial de relleno.
+- **Solo cambia la memoria.**
+
+**Dos detalles técnicos** para que la comparación sea limpia:
+- **En A se desactiva la memoria automática del Flow** (`_skip_auto_memory = True`).
+  Si no, todo `Flow` crea su propia `Memory` en LanceDB (comprobado en 1.15.23), y A
+  dejaría de ser "sin memoria de CrewAI".
+- **En B, la memoria usa el LLM del proyecto**, no el que trae por defecto
+  (`gpt-5.4-mini`).
+
+**Datos:** las 20 conversaciones EN01–EN20 de la Tabla 20 del documento de conjuntos
+de datos, en dos variantes:
+1. **Misma sesión, fuera de la ventana.** Entre la mención y la referencia se
+   intercalan al menos 10 intercambios de relleno, ya escritos. Si la referencia cae
+   dentro de la ventana de 5–10 intercambios (RNF-2.06), la resuelve el historial y
+   no se estaría midiendo la memoria.
+2. **Otra sesión.** La mención se hace en un viaje y la referencia en otro nuevo.
+   Solo con los casos que el autor etiquete como **duraderos** antes de ejecutar. Por
+   ejemplo, EN03 (Iberia) o EN09 (alergia) sí lo son; EN04 («nos alojamos en el
+   Alfama Suites») no.
+
+**Control de aislamiento:** un segundo usuario, sin esos hechos, envía el mismo
+mensaje de referencia. Cualquier uso de los hechos del primero cuenta como fuga.
+
+**Muestra:**
+- Variante 1: 20 casos × 2 configuraciones × 3 = 120 ejecuciones.
+- Variante 2: d casos duraderos × 2 × 3 = 6d.
+- Control de aislamiento: 20 × 2 × 3 = 120.
+
+| Variable | Cómo se mide | Criterio |
+|---|---|---|
+| Eficacia | Asociaciones correctas / total, por configuración y variante. Oráculo: la asociación esperada de la Tabla 20, anotada antes de ejecutar | A ≥ 0,85 (el umbral original de H-26) |
+| Diferencia de eficacia | McNemar sobre los pares discordantes (mismo caso en A y en B), como en H-38 | B solo se adopta si mejora ≥ 10 pp con p < 0,05 |
+| Restricciones críticas | Olvidos en los casos de salud o movilidad (EN02, EN05, EN09, EN11) | 0 en la configuración elegida |
+| Aislamiento | Fugas en el control | 0 (60 ejecuciones por configuración sin fugas → ≤ 5 %, regla del tres) |
+| Coste | Tokens y llamadas de LLM por conversación, **incluidas las de la propia memoria** (mediana y p95), con Wilcoxon pareado | Dentro de H-36 |
+| Latencia | p95 del turno de referencia y tiempo de recuperación de la memoria | Recuperación < 500 ms (RNF-2.03) |
+
+**Sobre la estadística:**
+- Como en el resto del plan, la conclusión se saca con el **voto mayoritario por
+  caso** (pares independientes). La cuenta por ejecución se informa aparte.
+- Con 20 casos, McNemar solo detecta diferencias grandes. Un resultado no
+  significativo no demuestra que A y B sean iguales. Aun así basta para la regla de
+  decisión, porque es B quien tiene que demostrar su mejora.
+
+**Regla de decisión** (fijada antes de ejecutar):
+- **B se adopta solo si cumple todo** lo siguiente:
+  - mejora la eficacia ≥ 10 pp con p < 0,05;
+  - 0 fugas;
+  - 0 olvidos críticos;
+  - se mantiene dentro de H-36 y H-43.
+
+  Es la misma regla que H-38: una pieza que gasta tokens tiene que ganarse su sitio.
+- **Si no, se queda A**, y las crews van con `memory=False`. La tabla de §5 de la
+  arquitectura describe hoy una memoria por ejecución, así que en ese caso habría
+  que actualizarla.
+- **Si A no llega a 0,85**, es un defecto de ReMAP, gane quien gane, y se registra
+  como incidencia.
+- **Si cada una gana en una variante**, se documenta y se estudia un híbrido. Por
+  ejemplo, usar `extract_memories()` de CrewAI dentro de la extracción de ReMAP.
+
+**Ficha:**
+- **Requisitos:** RNF-1.10 (desfasado), RF-05.01 a RF-05.05, RNF-6.3, RNF-2.03,
+  RNF-2.04 y RNF-2.06.
+- **Casos de uso:** CU-05.01 y CU-05.03.
+- **Coste:** ≈ 200 000 tokens. Es una estimación (dos configuraciones, la variante
+  entre sesiones y el control) que se revisará tras un piloto de 2–3 casos. Añade
+  ≈ 150 000 al presupuesto total.
+- **Prioridad:** Media. La original era Baja; sube porque decide la memoria de
+  producción.
+- **Responsable:** Autor (probador).
 
 ## Escenarios de validación V01–V12 (usados en H-35, H-40, H-43)
 
