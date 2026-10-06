@@ -203,7 +203,7 @@ agota la cuota gratuita no sirve.
 | Al guardar | ReMAP extrae los hechos, los clasifica (*hard*/*soft*) y los guarda en `hard_facts`/`soft_facts` con su `user_id` | La crew extrae recuerdos de cada tarea y los guarda sola. Un LLM infiere ámbito, categorías e importancia, y consolida con lo que ya hay |
 | Al recuperar | Top-K por similitud, filtrado por `user_id` en SQL, inyectado como contexto | `recall` automático antes de cada tarea, con `root_scope=/user/{id}`, `source=user:{id}` y `private=True` |
 | Aislamiento | Físico: la consulta SQL solo ve las filas del usuario | Lógico: ámbito y `source` dentro del mismo almacén |
-| Almacén | PostgreSQL + pgvector | LanceDB persistente (entorno de evaluación) |
+| Almacén | PostgreSQL + pgvector | Qdrant Edge persistente, pasado como instancia: `QdrantEdgeStorage(path=…)` (entorno de evaluación; D-036) |
 | Crews | `memory=False` | `memory=Memory(...)` con el ámbito del usuario |
 
 **Lo que no cambia entre A y B:**
@@ -213,8 +213,8 @@ agota la cuota gratuita no sirve.
 
 **Dos detalles técnicos** para que la comparación sea limpia:
 - **En A se desactiva la memoria automática del Flow** (`_skip_auto_memory = True`).
-  Si no, todo `Flow` crea su propia `Memory` en LanceDB (comprobado en 1.15.23), y A
-  dejaría de ser "sin memoria de CrewAI".
+  Si no, todo `Flow` crea su propia `Memory` (comprobado en 1.15.23; con D-036, en un
+  Qdrant Edge propio de la ejecución), y A dejaría de ser "sin memoria de CrewAI".
 - **En B, la memoria usa el LLM del proyecto**, no el que trae por defecto
   (`gpt-5.4-mini`).
 
