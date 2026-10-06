@@ -37,7 +37,11 @@ sin agente formateador. Memoria: pgvector solo con hechos del usuario (nunca dat
 del mundo); memoria nativa de CrewAI (unificada sobre LanceDB en 1.15) solo con un
 almacén efímero propio de cada ejecución en producción, con ruta explícita y no
 `CREWAI_STORAGE_DIR` (global al proceso). No aísla por usuario: ver documento de
-arquitectura §5 y D-035 antes de tocar esto.
+arquitectura §5 y D-035 antes de tocar esto. El knowledge y la memoria de CrewAI
+van en Qdrant, con un almacén propio por ejecución (`RunKnowledgeStorage` y
+`RunMemoryStorage`, instalados al importar `app.agents`, D-036). Nunca se usan los
+de serie (ChromaDB y LanceDB, comunes al proceso, mezclan usuarios). Nuestro
+código no importa `chromadb` (Ruff lo prohíbe).
 
 ## Estructura del repo (real, verificar antes de asumir `apps/`)
 - `frontend/` — Next.js, Vercel (incluye `.storybook/`, `stories/`, `tests/`)

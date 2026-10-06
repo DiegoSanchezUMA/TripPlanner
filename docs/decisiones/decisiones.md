@@ -42,6 +42,7 @@ arquitectura multiagente viven en `docs/arquitectura-multiagente-crewai.md`.
 | D-033 | `main` protegida con un ruleset: PR obligatorio y `ci-ok` como único check requerido | Aceptada |
 | D-034 | Imagen del backend: Dockerfile multietapa (builder/runner) con caché de capas, y servicio `api` en el Compose | Aceptada |
 | D-035 | Contenedor de la API de solo lectura, con `/tmp` en memoria como único sitio escribible para CrewAI | Aceptada |
+| D-036 | Knowledge y memoria de CrewAI en Qdrant, un almacén propio por ejecución, y ChromaDB solo como librería | Aceptada |
 
 Formato de cada entrada: contexto, decisión, alternativas descartadas y
 consecuencias. Estados: **Aceptada**, **Pendiente** (decidida pero aún sin
@@ -1701,3 +1702,240 @@ todavía no lo importa.
      proceso. Eso supone riesgo de bloqueos de SQLite con usuarios
      concurrentes y salidas de varios usuarios en un mismo fichero mientras
      vive el contenedor (es efímero, pero compartido).
+
+---
+
+## D-036 · Knowledge y memoria de CrewAI en Qdrant, un almacén propio por ejecución, y ChromaDB solo como librería
+
+- **Fecha:** 2026-10-06
+- **Estado:** Aceptada
+
+**Contexto.**
+
+1. **Alertas de Dependabot.** El 2026-10-05, Dependabot abrió cuatro alertas sobre
+   `chromadb` 1.1.1 en `backend/uv.lock`:
+
+   | Alerta | Gravedad | Qué permite |
+   |---|---|---|
+   | GHSA-f4j7-r4q5-qw2c (CVE-2026-45829) | Crítica (CVSS 10) | Ejecutar código sin autenticarse, enviando al endpoint de colecciones del servidor un repositorio de modelo malicioso con `trust_remote_code` |
+   | GHSA-36p7-vc44-83pf (CVE-2026-45833) | Crítica | Lo mismo, con credenciales y permiso para modificar colecciones |
+   | GHSA-2wm9-hf6c-p5cr (CVE-2026-45830) | Alta | Leer y modificar colecciones de cualquier *tenant* |
+   | GHSA-xph7-9rjv-w5fr (CVE-2026-45831) | Alta | Saltarse el aislamiento entre *tenants* de `SimpleRBACAuthorizationProvider` |
+
+   Las cuatro están en el **servidor HTTP** de ChromaDB y su autorización
+   multiinquilino. **No hay versión corregida**: están afectadas todas hasta la
+   1.5.9. Tampoco se puede actualizar ni quitar:
+   - CrewAI 1.15.23 exige `chromadb~=1.1.0`.
+   - Al importar CrewAI se cargan 58 módulos de `chromadb`.
+   - Los *embedders* de Google y Azure de CrewAI son clases de ChromaDB.
+
+   Por eso las *security updates* de D-007 no abren ningún PR: no hay arreglo
+   compatible.
+
+2. **Al comprobar si nos afectaba apareció un problema más grave, de diseño.**
+   El esqueleto de §11 de `arquitectura-multiagente-crewai.md` pasa los
+   *hard facts* con `Crew(knowledge_sources=[hard_facts_source(user_id)])`.
+   CrewAI los copia a su `KnowledgeStorage` de serie, que tiene estas propiedades:
+   - Es un ChromaDB persistente.
+   - Su ruta (`DEFAULT_STORAGE_PATH`) se fija al importar y es común a todo el
+     proceso.
+   - Todas las crews usan la misma colección, `knowledge_crew` (`crew.py:711`).
+
+   Se probó con dos usuarios en el mismo proceso: **la crew del usuario B
+   recupera la alergia del usuario A**. Incumple RNF-6.3 y contradice la fila
+   `knowledge` de la tabla de §5. No es un CVE, pero es un fallo de aislamiento
+   en nuestro propio diseño.
+
+3. **La memoria tiene el mismo problema.** Sin `storage=` explícito, `Memory()`
+   guarda en un LanceDB de ruta común al proceso. §5 ya pedía una ruta propia
+   para la memoria de cada crew, pero eso no cubre la memoria que todo `Flow`
+   crea por su cuenta: `Memory(root_scope="/flow/<nombre>")`, la misma para todos
+   los usuarios (`flow/runtime/__init__.py:890`).
+
+4. **El autor quiere conservar el `Knowledge` y la memoria de CrewAI**, ambos con
+   Qdrant: un solo motor vectorial para lo que gestiona CrewAI, y nada de
+   ChromaDB.
+
+**Decisión.**
+
+1. **Knowledge en un Qdrant en memoria, uno por ejecución.**
+   - `RunKnowledgeStorage` (`backend/app/agents/knowledge/run_storage.py`) es una
+     subclase del `KnowledgeStorage` de CrewAI que crea su propio
+     `QdrantClient(location=":memory:")`.
+   - Se instala con `set_knowledge_storage_factory`, la API pública de CrewAI para
+     eso, al importar `app.agents`. Así, **todo** `Knowledge` sin `storage=`
+     explícito recibe uno nuevo, incluido el que CrewAI crea por su cuenta con
+     `Crew(knowledge_sources=...)` o `Agent(knowledge_sources=...)`. La fábrica es
+     global, pero no guarda estado: no hay carrera entre ejecuciones (D-011).
+   - **El aislamiento viene de la construcción, no de un filtro.** No se comparte
+     nada entre ejecuciones, el índice desaparece con la crew y nunca toca el disco,
+     que es de solo lectura (D-035).
+   - La fuente de verdad sigue siendo pgvector, con los *hard facts* filtrados por
+     `user_id`. Qdrant es solo el índice temporal que consulta CrewAI.
+
+2. **Corrige tres fallos del adaptador de Qdrant de CrewAI 1.15.23.** Los tres se
+   reprodujeron con las piezas de serie:
+
+   | Fallo | Qué pasa con las piezas de serie | Qué hace `RunKnowledgeStorage` |
+   |---|---|---|
+   | Dimensión fija | `KnowledgeStorage.save()` crea la colección con 384 dimensiones (las de fastembed). Con 768: `could not broadcast input array from shape (768,) into shape (384,)` | Crea la colección con la dimensión del *embedder* del proyecto |
+   | Vía async | Los agentes consultan con `aquery_knowledge` (`agent/utils.py:375`). Con un cliente síncrono, `asearch` devuelve `[]` **sin avisar**, mientras que `search` sí encontraba el hecho | `asearch`/`asave`/`areset` delegan en las versiones síncronas en un hilo |
+   | Errores tragados | `search` captura cualquier error y devuelve `[]` | Los errores se propagan. Solo devuelve `[]` si el usuario no tiene hechos |
+
+   Además, serializa el acceso con un cerrojo. El modo local de qdrant-client no
+   sincroniza hilos (comprobado en 1.14.3), y las tareas async T2–T4 consultan a
+   la vez.
+
+3. **Memoria en un Qdrant Edge, uno por ejecución.**
+   - `RunMemoryStorage` (`backend/app/agents/memory/run_storage.py`) es una
+     subclase del `QdrantEdgeStorage` de CrewAI, el que usa
+     `Memory(storage="qdrant-edge")`, con un directorio temporal propio.
+   - Se instala con `set_memory_storage_factory` al importar `app.agents`. Así,
+     toda `Memory` sin `storage=` explícito recibe uno nuevo: la de
+     `Crew(memory=True)`, la de `Memory(...)` y la que crea cada `Flow` (probado:
+     dos `Flow` reciben directorios distintos).
+   - En el contenedor, el directorio está en `/tmp`, que está en memoria (D-035).
+   - Una ruta como especificación (`Memory(storage="./ruta")`) se rechaza: sería un
+     almacén persistente fuera de este control. La memoria persistente del entorno
+     de evaluación (§5) se pasa como instancia, por ejemplo
+     `QdrantEdgeStorage(path=...)`.
+   - Sobre el de serie cambia dos cosas, comprobadas:
+
+   | Problema del `QdrantEdgeStorage` de serie | Qué hace `RunMemoryStorage` |
+   |---|---|
+   | Abre el *shard* en cada operación y **no sincroniza hilos**. La memoria guarda en segundo plano mientras los agentes consultan. Con 8 hilos se perdieron **20 de 100 guardados**, y entre 3 y 6 de 8 en una prueba de 16 operaciones (5 de 5 ejecuciones): `path already contains segment data` | Serializa todas sus operaciones con un cerrojo (`RLock`). Las variantes async del original delegan en las síncronas, así que también pasan por él |
+   | Se registra en `atexit` para volcar los datos a un *shard* "central" al salir, y esa referencia lo mantiene vivo, con su directorio, hasta el final del proceso | Quita ese registro y borra el directorio al cerrar o cuando el objeto deja de usarse (`weakref.finalize`). Nada se acumula en el `tmpfs` |
+
+4. **Dependencias nuevas.** Cada una es la que usa el adaptador de CrewAI
+   correspondiente.
+   - **`qdrant-client>=1.14.3,<1.15`**, para el knowledge:
+     - Mismo rango que el extra `crewai[qdrant]`, pero **sin `fastembed`**: no
+       usamos un modelo local, así que se evitan `fastembed` y `onnxruntime`.
+     - Sus dependencias ya estaban en el lock.
+   - **`qdrant-edge-py>=0.8.0,<0.9`**, para la memoria (extra
+     `crewai[qdrant-edge]`):
+     - No tiene ninguna dependencia.
+     - Tiene *wheels* `abi3` para `manylinux_2_28_aarch64` (Debian 13, el de la
+       imagen) y para `win_amd64`.
+   - Las dos se instalan solo con *wheels* (`--no-build`, D-031).
+   - **Base de datos de avisos de GitHub** (la que usa Dependabot):
+     - `qdrant-client` 1.14.3: **0 avisos**.
+     - Historial de `qdrant-client`: uno solo, GHSA-7m75-x27w-r52r
+       (CVE-2024-3829), que afecta a versiones < 1.9.0.
+     - `qdrant-edge-py`: **0 avisos**, en ninguna versión.
+     - Servidor Qdrant: dos avisos (GHSA-f632-vm87-2m2f, GHSA-xcr2-h8hv-6227). No
+       aplican, porque no hay servidor.
+
+5. **ChromaDB, solo como librería, con barreras que lo vigilan:**
+   - **Ruff** (TID251, `banned-api`) prohíbe importar `chromadb` en nuestro código,
+     incluidos sus submódulos (probado).
+   - **Un test** comprueba que `chromadb.server` no se carga nunca y que
+     `sentence-transformers` y `transformers`, que hacen falta para la ejecución
+     remota de código, no están instalados.
+   - **Un paso del job `docker` del CI**, dentro del contenedor de solo lectura
+     (ARM64, como la VM), crea y consulta un Qdrant en memoria y guarda un
+     recuerdo en un `RunMemoryStorage`.
+
+6. **Las cuatro alertas se descartan** en GitHub con el motivo *Vulnerable code is
+   not actually used* y un enlace a esta decisión. Se pueden reabrir. No se
+   cierran solas: ChromaDB sigue en el lockfile porque CrewAI lo exige, y
+   Dependabot las mantiene abiertas hasta que se descartan o hasta que una
+   versión de CrewAI deja de usar ChromaDB o permite una versión corregida.
+
+**Alternativas descartadas.**
+- **Actualizar o quitar `chromadb`:** no existe versión corregida y CrewAI no
+  deja salir de la 1.1. Quitarlo también se probó, en un entorno aparte con
+  `override-dependencies = ["chromadb; sys_platform == 'never'"]`: uv no lo
+  instala, pero `import crewai` falla con `ModuleNotFoundError: No module named
+  'chromadb'` (`memory/unified_memory.py:38` →
+  `rag/embeddings/providers/openai/openai_provider.py:5`). La documentación de
+  CrewAI deja elegir entre ChromaDB y Qdrant como almacén, y eso es lo que se
+  hace aquí, pero el paquete sigue siendo obligatorio para arrancar.
+- **El `KnowledgeStorage` de serie con una colección por usuario:** el nombre
+  `crew` lo fija `Crew` y la ruta seguiría siendo común. El aislamiento
+  dependería de no equivocarse nunca.
+- **Un servidor Qdrant en su propio contenedor:** sería otro servicio en una VM
+  con RAM justa, con acceso por red y con sus propios avisos de servidor (los dos
+  de arriba). Además, crearía un segundo almacén persistente de datos del usuario
+  junto a pgvector. Para unas decenas de hechos por usuario no compensa.
+- **Qdrant en disco (`path=`) o como cliente global de CrewAI
+  (`set_rag_config`):** la ruta o el cliente serían comunes al proceso, con la
+  misma fuga.
+- **El extra `crewai[qdrant]`:** arrastra `fastembed` y `onnxruntime` para un
+  modelo local que no se usa.
+- **Qdrant Edge también para el knowledge:** el adaptador de knowledge de CrewAI
+  solo sabe usar `qdrant-client`.
+- **No usar `Knowledge` e inyectar los hechos en las tareas:** fue la primera
+  propuesta, pero el autor prefiere conservar la recuperación automática de
+  CrewAI.
+- **Memoria: LanceDB con una ruta propia por ejecución** (lo que decía §5).
+  Aísla la memoria de las crews, pero no la que crea cada `Flow`, que va a la
+  ruta común. Además, dejaría dos motores vectoriales para lo que gestiona
+  CrewAI.
+- **Memoria: el modo `"qdrant-edge"` de serie.** Usa una ruta común al proceso y
+  pierde guardados con varios hilos (ver arriba).
+- **Memoria: un `StorageBackend` propio sobre `qdrant-client` en memoria.**
+  Habría que reescribir unas 900 líneas que CrewAI ya mantiene en
+  `QdrantEdgeStorage`.
+
+**Consecuencias.**
+- **Verificado con 22 tests nuevos**: 12 del knowledge y 10 de la memoria.
+  Cubren:
+  - el aislamiento entre ejecuciones (la fuga, como test de regresión);
+  - la dimensión del *embedder*;
+  - la vía async;
+  - los hilos concurrentes en la memoria;
+  - cada operación envuelta con el cerrojo;
+  - el borrado del directorio;
+  - el rechazo de rutas explícitas;
+  - la instalación de las fábricas al importar `app.agents`;
+  - las barreras de ChromaDB.
+
+  Pruebas inversas:
+  - Con la fábrica del knowledge quitada, el test de aislamiento falla, porque B
+    ve la alergia de A.
+  - Con el `QdrantEdgeStorage` de serie, el test de hilos pierde guardados en 5
+    de 5 ejecuciones.
+- **Cada operación de la memoria abre, escribe y cierra el *shard* en disco.** En
+  Windows, unos 0,8 s por operación (medido en los tests); en el contenedor, `/tmp` está en memoria. La
+  memoria guarda en segundo plano, así que no bloquea a los agentes, pero el
+  tiempo real en la VM está por medir.
+- **Cada ejecución vuelve a calcular los *embeddings*** de los hechos del usuario
+  al crear la crew. Son pocos textos, pero son llamadas al *embedder* dentro de la
+  cuota gratuita. pgvector ya tiene esos vectores; reutilizarlos es una mejora
+  posible.
+- **Las crews deben llevar `embedder=project_embedder()`.** Sin él,
+  `RunKnowledgeStorage` lanza un error. Pero `Crew` captura los errores al crear
+  su knowledge (`crew.py:718`) y solo registra un aviso: la crew se quedaría sin
+  knowledge, aunque sin fuga. Lo tiene que vigilar el test de cada crew.
+- **El knowledge recupera por similitud.** Los guardrails deterministas de dieta
+  y accesibilidad no deberían depender de que una búsqueda encuentre la
+  restricción. Se revisará al implementarlos.
+- **Dependencia de detalles internos de CrewAI.**
+  - `RunKnowledgeStorage` sustituye el validador privado `_init_client` de
+    `KnowledgeStorage`.
+  - `RunMemoryStorage` usa `_base_path` y `_closed` de `QdrantEdgeStorage`, y
+    deshace su registro en `atexit`.
+
+  Una versión nueva de CrewAI podría cambiar cualquiera de ellos; los tests de
+  esta decisión lo detectarían.
+- **Cada `Flow` tiene su propia memoria**, borrada al dejar de usarse. Si el Flow
+  no la necesita, `_skip_auto_memory = True` evita crearla.
+- **ChromaDB sigue instalado.** Las alertas nuevas que aparezcan se revisan contra
+  esta decisión. D-007 sigue valiendo, con un límite: las alertas sin arreglo
+  compatible se tratan a mano, como aquí.
+- **Revisar esta decisión si:**
+  - CrewAI cambia su versión de `chromadb`, su `KnowledgeStorage` o su
+    `QdrantEdgeStorage`;
+  - ChromaDB publica un arreglo;
+  - aparece `sentence-transformers` en el lock;
+  - el backend pasa a tener varios procesos (D-011).
+- **Incorporada a `arquitectura-multiagente-crewai.md`** con el visto bueno del
+  autor (2026-10-06). Se cambiaron:
+  - en §5, los hallazgos, las filas de memoria y knowledge y una fila nueva para
+    la memoria de cada `Flow`;
+  - una subsección nueva, §5.1, con el aviso de seguridad, por qué no se podía
+    cambiar de versión, las ventajas de seguridad y de despliegue con Docker, cómo
+    se separaría a un servidor y por qué no va en un contenedor propio;
+  - en §11, la estructura y el esqueleto;
+  - en §13, §14 y §15, las líneas correspondientes.

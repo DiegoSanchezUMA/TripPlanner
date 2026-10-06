@@ -306,6 +306,27 @@ jobs:
           LanceDBStorage(path=tempfile.mkdtemp(prefix='crew-'));
           print('CrewAI', crewai.__version__, 'OK')"
 
+      # Knowledge en un Qdrant en memoria y memoria en un Qdrant Edge en /tmp, uno
+      # por ejecución (D-036). Comprueba el wheel ARM64 de Qdrant Edge y que nada
+      # escribe fuera de /tmp, porque aquí el disco es de solo lectura.
+      - name: Qdrant (knowledge y memoria) funciona (contenedor de solo lectura)
+        run: >
+          docker compose --env-file ../env/.env exec -T api python -c
+          "import app.agents;
+          from qdrant_client import QdrantClient;
+          from qdrant_client.models import Distance, PointStruct, VectorParams;
+          from crewai.memory.types import MemoryRecord;
+          from app.agents.memory import RunMemoryStorage;
+          q = QdrantClient(location=':memory:');
+          q.create_collection('t', vectors_config=VectorParams(size=4, distance=Distance.COSINE));
+          q.upsert('t', [PointStruct(id=1, vector=[1.0, 0.0, 0.0, 0.0], payload={})]);
+          assert q.query_points('t', query=[1.0, 0.0, 0.0, 0.0]).points;
+          m = RunMemoryStorage();
+          m.save([MemoryRecord(content='x', scope='/', embedding=[1.0, 0.0, 0.0, 0.0])]);
+          assert m.count() == 1;
+          m.close();
+          print('Qdrant OK: knowledge en memoria y memoria en', m._base_path.parent)"
+
       - name: Logs de los contenedores (si algo ha fallado)
         if: failure()
         run: docker compose --env-file ../env/.env logs
