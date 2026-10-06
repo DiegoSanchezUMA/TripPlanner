@@ -9,3 +9,16 @@ ignoredBuiltDependencies:
   - "@swc/core"
   - esbuild
   - unrs-resolver
+
+# Versiones vulnerables que traen dependencias de CopilotKit sin arreglo
+# compatible: sus padres, incluso en su última versión, piden un rango que no
+# llega a la versión corregida (D-037). Cada regla sustituye cualquier copia por
+# debajo de la versión corregida. Quitarlas cuando el padre lo permita.
+overrides:
+  # @ai-sdk/provider-utils 3.x pide undici ^5.29.0 (13 avisos; con undici 6 se
+  # va también @fastify/busboy 2.1.1, 2 avisos).
+  "undici@<6.28.1": "^6.29.0"
+  # graphql-yoga 5.24.x pide ^11.2.0 (prototype pollution en mergeDeep).
+  "@graphql-tools/utils@<12.0.1": "^12.0.3"
+  # CopilotKit, mermaid y remark-math piden ^0.16 (aviso de gravedad baja).
+  "katex@<0.18.2": "^0.18.2"
