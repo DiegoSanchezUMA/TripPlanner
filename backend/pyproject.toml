@@ -16,6 +16,10 @@ dependencies = [
     "alembic>=1.20,<2",
     "psycopg[binary,pool]>=3.3.6,<3.4",
     "pgvector>=0.5,<0.6",
+    # Knowledge de CrewAI en un Qdrant en memoria por ejecución (D-036). Mismo
+    # rango que el extra crewai[qdrant], pero sin fastembed: se usa el embedder
+    # del proyecto, no un modelo local.
+    "qdrant-client>=1.14.3,<1.15",
     "ag-ui-protocol>=1.0,<2",
     "langfuse>=4.16,<5",
     "openinference-instrumentation-crewai>=1.1.20,<2",
@@ -42,7 +46,12 @@ target-version = "py313"
 line-length = 100
 
 [tool.ruff.lint]
-select = ["E", "W", "F", "I", "B", "UP", "N", "S", "SIM", "ASYNC", "RUF"]
+select = ["E", "W", "F", "I", "B", "UP", "N", "S", "SIM", "ASYNC", "RUF", "TID251"]
+
+# CrewAI instala chromadb (~=1.1.0, con avisos de seguridad sin parche), pero
+# nuestro código no debe usarlo: D-036.
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"chromadb".msg = "Prohibido (D-036): vectores del usuario en pgvector; knowledge en RunKnowledgeStorage (Qdrant por ejecución)"
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101"] # assert es la forma normal de comprobar en pytest

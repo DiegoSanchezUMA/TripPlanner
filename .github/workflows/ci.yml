@@ -306,6 +306,20 @@ jobs:
           LanceDBStorage(path=tempfile.mkdtemp(prefix='crew-'));
           print('CrewAI', crewai.__version__, 'OK')"
 
+      # El knowledge va en un Qdrant en memoria por ejecución (D-036): no debe
+      # tocar el disco, que aquí es de solo lectura.
+      - name: Qdrant en memoria funciona (contenedor de solo lectura)
+        run: >
+          docker compose --env-file ../env/.env exec -T api python -c
+          "import app.agents;
+          from qdrant_client import QdrantClient;
+          from qdrant_client.models import Distance, PointStruct, VectorParams;
+          q = QdrantClient(location=':memory:');
+          q.create_collection('t', vectors_config=VectorParams(size=4, distance=Distance.COSINE));
+          q.upsert('t', [PointStruct(id=1, vector=[1.0, 0.0, 0.0, 0.0], payload={})]);
+          assert q.query_points('t', query=[1.0, 0.0, 0.0, 0.0]).points;
+          print('Qdrant en memoria OK')"
+
       - name: Logs de los contenedores (si algo ha fallado)
         if: failure()
         run: docker compose --env-file ../env/.env logs
