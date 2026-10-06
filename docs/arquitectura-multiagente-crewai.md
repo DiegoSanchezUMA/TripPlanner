@@ -272,8 +272,19 @@ del servidor de ChromaDB (GHSA-2wm9-hf6c-p5cr y GHSA-xph7-9rjv-w5fr).
 - **CrewAI 1.15.23 exige `chromadb~=1.1.0`**, es decir, ≥ 1.1.0 y < 1.2. Aunque
   saliera un parche en la 1.6, no se podría instalar hasta que CrewAI lo
   permitiera.
-- **Tampoco se puede desinstalar**: CrewAI carga 58 módulos de `chromadb` al
-  importarse, y sus *embedders* de Google y Azure son clases de ChromaDB.
+- **Tampoco se puede desinstalar** (probado el 2026-10-06). En un entorno con
+  CrewAI 1.15.23 al que uv le quita `chromadb` con un *override*
+  (`override-dependencies = ["chromadb; sys_platform == 'never'"]`), el simple
+  `import crewai` falla con `ModuleNotFoundError: No module named 'chromadb'`. La
+  cadena es `crewai/__init__.py` → `agent` → `memory/unified_memory.py:38` →
+  `rag/embeddings/providers/openai/openai_provider.py:5`. Además, CrewAI carga 58
+  módulos de `chromadb` al importarse, y sus *embedders* de Google y Azure son
+  clases de ChromaDB.
+- **Lo que sí se puede elegir es dónde se guardan los vectores.** La
+  documentación de CrewAI ofrece ChromaDB (por defecto) o Qdrant, y aquí se elige
+  Qdrant para el knowledge y para la memoria. Pero elegir el almacén no quita el
+  paquete: CrewAI lo sigue necesitando para arrancar. En su repositorio no hay
+  ninguna petición abierta para hacerlo opcional.
 
 **¿Nos afectaba?** No directamente. Los cuatro avisos están en el **servidor HTTP**
 de ChromaDB, que nunca arrancamos, y la ejecución de código necesita

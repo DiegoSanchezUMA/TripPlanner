@@ -1842,8 +1842,14 @@ todavía no lo importa.
    versión de CrewAI deja de usar ChromaDB o permite una versión corregida.
 
 **Alternativas descartadas.**
-- **Actualizar o quitar `chromadb`:** no existe versión corregida, CrewAI no deja
-  salir de la 1.1, y quitarlo con un *override* de uv rompe `import crewai`.
+- **Actualizar o quitar `chromadb`:** no existe versión corregida y CrewAI no
+  deja salir de la 1.1. Quitarlo también se probó, en un entorno aparte con
+  `override-dependencies = ["chromadb; sys_platform == 'never'"]`: uv no lo
+  instala, pero `import crewai` falla con `ModuleNotFoundError: No module named
+  'chromadb'` (`memory/unified_memory.py:38` →
+  `rag/embeddings/providers/openai/openai_provider.py:5`). La documentación de
+  CrewAI deja elegir entre ChromaDB y Qdrant como almacén, y eso es lo que se
+  hace aquí, pero el paquete sigue siendo obligatorio para arrancar.
 - **El `KnowledgeStorage` de serie con una colección por usuario:** el nombre
   `crew` lo fija `Crew` y la ruta seguiría siendo común. El aislamiento
   dependería de no equivocarse nunca.
